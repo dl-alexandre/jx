@@ -30,6 +30,42 @@ defmodule JX.Approvals do
     |> insert_new()
   end
 
+  @doc """
+  Create an operator review item from a caller-supplied request (e.g. an agent
+  asking for approval or recording a handoff).
+
+  Reuses the same dedupe + routing + operational-event pipeline as DevIDE
+  notifications. Returns `{:ok, approval}` for a newly created item,
+  `{:ok, :duplicate}` when an active item with the same dedupe key already
+  exists, or `{:error, reason}`.
+  """
+  def create(attrs) when is_map(attrs) do
+    case insert_new([normalize_request_attrs(attrs)]) do
+      %{saved: 1, records: [approval]} -> {:ok, approval}
+      %{saved: 0, duplicates: dups} when dups > 0 -> {:ok, :duplicate}
+      %{errors: [error | _]} -> {:error, error}
+      _ -> {:error, :create_failed}
+    end
+  end
+
+  defp normalize_request_attrs(attrs) do
+    kind = to_string(attrs[:kind] || attrs["kind"])
+    metadata = attrs[:metadata] || attrs["metadata"] || %{}
+
+    %{
+      approval_id: approval_id(),
+      source: to_string(attrs[:source] || attrs["source"] || "agent"),
+      workspace_id: to_string(attrs[:workspace_id] || attrs["workspace_id"] || ""),
+      kind: kind,
+      severity: to_string(attrs[:severity] || attrs["severity"] || "warning"),
+      target_ref: to_string(attrs[:target_ref] || attrs["target_ref"] || ""),
+      summary: to_string(attrs[:summary] || attrs["summary"] || ""),
+      status: "open",
+      metadata: encode_json(metadata)
+    }
+    |> then(fn normalized -> Map.put(normalized, :dedupe_key, dedupe_key(normalized)) end)
+  end
+
   def list(opts \\ []) do
     limit = Keyword.get(opts, :limit, 50)
 
@@ -580,9 +616,17 @@ defmodule JX.Approvals do
   end
 
   defp field(map, key) when is_map(map),
-    do: Map.get(map, key) || Map.get(map, String.to_atom(key))
+    do: Map.get(map, key) || Map.get(map, atom_key(key))
 
   defp field(_value, _key), do: nil
+
+  defp atom_key(key) when is_binary(key) do
+    String.to_existing_atom(key)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp atom_key(_key), do: nil
 
   defp list_value(value) when is_list(value), do: value
   defp list_value(_value), do: []

@@ -9,8 +9,8 @@ defmodule JX.Approvals.Approval do
   alias JX.MonitorEvents
 
   @statuses ~w(open acknowledged dismissed)
-  @sources ~w(devide)
-  @kinds ~w(proposal_conflict unsafe_db failed_run policy_blocked)
+  @sources ~w(devide agent)
+  @kinds ~w(proposal_conflict unsafe_db failed_run policy_blocked agent_request agent_handoff)
 
   @type t :: %__MODULE__{}
 

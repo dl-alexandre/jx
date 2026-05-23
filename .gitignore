@@ -35,3 +35,6 @@ jx-*.tar
 
 # Rust build artifacts
 /crates/*/target/
+
+# Runtime log artifacts
+/logs/

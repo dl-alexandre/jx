@@ -170,7 +170,10 @@ defmodule JX.CampaignsTest do
 
     assert {:ok, persisted} = Campaigns.status("onebackend-v3-e14", root: ctx.state_root)
     assert [%{"status" => "pr_detected", "host_id" => "host-a"}] = persisted["slots"]
-    refute File.exists?(Path.join(ctx.worktrees, "onebackend-v3-grok-1152"))
+    # host-b must not claim issue 1152 (which it does not own): no slot is created
+    # for it. The 1152 worktree dir itself is pre-seeded by setup/0, so its presence
+    # is not a usable signal here — assert on campaign state instead.
+    refute Enum.any?(persisted["slots"], &(&1["issue_number"] == 1152))
   end
 
   defp git!(repo, args) do

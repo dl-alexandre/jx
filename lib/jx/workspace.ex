@@ -356,6 +356,8 @@ defmodule JX.Workspace do
 
   def approval_summary(opts \\ []), do: Approvals.summary(opts)
 
+  def create_approval(attrs), do: Approvals.create(attrs)
+
   def acknowledge_approval(approval_id, opts \\ []), do: Approvals.acknowledge(approval_id, opts)
 
   def dismiss_approval(approval_id, opts \\ []), do: Approvals.dismiss(approval_id, opts)
@@ -5991,7 +5993,9 @@ defmodule JX.Workspace do
 
   defp absolute_path_or_empty(_path), do: ""
 
-  defp session_agent_name(%{kind: kind}) when kind in ["claude", "opencode", "codex", "grok"], do: kind
+  defp session_agent_name(%{kind: kind}) when kind in ["claude", "opencode", "codex", "grok"],
+    do: kind
+
   defp session_agent_name(_session), do: "claude"
 
   defp prompt_hash_scope(project, agent_name, "native"), do: "#{project.slug}:#{agent_name}"

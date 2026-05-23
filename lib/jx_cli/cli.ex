@@ -10,6 +10,7 @@ defmodule JX.CLI do
   alias JX.CLI.Approvals, as: ApprovalsCLI
   alias JX.CLI.Assignments, as: AssignmentsCLI
   alias JX.CLI.Campaign, as: CampaignCLI
+  alias JX.CLI.Agent, as: AgentCLI
   alias JX.CLI.Cleanup, as: CleanupCLI
   alias JX.CLI.Dashboard, as: DashboardCLI
   alias JX.CLI.DevIDE, as: DevIDECLI
@@ -88,6 +89,8 @@ defmodule JX.CLI do
   defp dispatch(["project" | args]), do: ProjectCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["campaign" | args]), do: CampaignCLI.run(args, start_app: &start_app/0)
+
+  defp dispatch(["agent" | args]), do: AgentCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["promote", "preflight", name | args]) do
     {opts, rest, invalid} =
@@ -7246,6 +7249,7 @@ defmodule JX.CLI do
       "runtimes" => RuntimesCLI.usage_lines(),
       "assignments" => AssignmentsCLI.usage_lines(),
       "campaign" => CampaignCLI.usage_lines(),
+      "agent" => AgentCLI.usage_lines(),
       "call" => [call_usage()],
       "cleanup" => CleanupCLI.usage_lines(),
       "ci" => [ci_usage()],
