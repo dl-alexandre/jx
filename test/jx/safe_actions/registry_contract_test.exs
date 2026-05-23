@@ -9,6 +9,8 @@ defmodule JX.SafeActions.RegistryContractTest do
   alias JX.CLI
   alias JX.DevIDE.Client
   alias JX.DevIDE.WorkspaceSnapshot
+  alias JX.HostCapacity.Observation
+  alias JX.OperationalLeases.Lease
   alias JX.OrchestrationActions.OrchestrationAction
   alias JX.Repo
   alias JX.SafeActions
@@ -398,6 +400,8 @@ defmodule JX.SafeActions.RegistryContractTest do
   end
 
   defp cleanup_state do
+    Repo.delete_all(Lease)
+    Repo.delete_all(Observation)
     Repo.delete_all(ExecutionEvent)
     Repo.delete_all(OrchestrationAction)
     Repo.delete_all(Approval)

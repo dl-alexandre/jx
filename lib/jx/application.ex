@@ -45,7 +45,13 @@ defmodule JX.Application do
   end
 
   defp burrito_running? do
-    Code.ensure_loaded?(Burrito.Util.Args) and
-      apply(Burrito.Util.Args, :running_standalone?, [])
+    case Code.ensure_loaded(Burrito.Util.Args) do
+      {:module, _} ->
+        function_exported?(Burrito.Util.Args, :running_standalone?, 0) and
+          apply(Burrito.Util.Args, :running_standalone?, [])
+
+      _ ->
+        false
+    end
   end
 end

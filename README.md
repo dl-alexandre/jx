@@ -134,12 +134,17 @@ mix hex.build
 mix precommit
 ```
 
-Build the local escript:
+For local dogfooding, build the escript with `mix jx.build` (see below).
+
+Build the local dogfood escript (recommended for contributors):
 
 ```bash
-mix escript.build
-JX_USE_ESCRIPT=1 bin/jx status
+mix jx.build          # or: MIX_ENV=prod mix escript.build
+bin/jx --help         # auto-uses ./jx if present (no env var needed)
 ```
+
+After building, `bin/jx` (and `./jx`) will prefer the fast, consistent escript binary.
+Use `JX_USE_MIX=1 bin/jx ...` only if you need to run against the live source during development.
 
 Build the Rust launcher:
 

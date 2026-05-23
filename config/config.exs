@@ -54,7 +54,10 @@ config :jx,
         "opencode",
     "codex" =>
       System.get_env("JX_CODEX_BIN") ||
-        "codex"
+        "codex",
+    "grok" =>
+      System.get_env("JX_GROK_BIN") ||
+        "scripts/grok"
   },
   agent_commands: %{
     "claude" =>
@@ -65,7 +68,10 @@ config :jx,
         "{{agent_bin}} run --dir {{worktree_path}} --dangerously-skip-permissions \"Read the attached prompt file and complete the task.\" --file {{prompt_path}}",
     "codex" =>
       System.get_env("JX_CODEX_CMD") ||
-        "{{agent_bin}} exec --dangerously-bypass-approvals-and-sandbox -C {{worktree_path}} - < {{prompt_path}}"
+        "{{agent_bin}} exec --dangerously-bypass-approvals-and-sandbox -C {{worktree_path}} - < {{prompt_path}}",
+    "grok" =>
+      System.get_env("JX_GROK_CMD") ||
+        "{{agent_bin}} --dir {{worktree_path}} --dangerously-skip-permissions --prompt-file {{prompt_path}}"
   }
 
 config :logger, level: :warning

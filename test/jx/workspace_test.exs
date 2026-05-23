@@ -614,6 +614,12 @@ defmodule JX.WorkspaceTest do
   end
 
   test "list_tmux_sessions reconstructs raw host tmux sessions" do
+    Process.put(
+      :fake_ssh_tmux_sessions,
+      "/Users/developer/.profile: line 15: zmodload: command not found\n" <>
+        "jx_saysure_task_deadbeef_codex\t1700000000\t0\t1\t/srv/repos/saysure\n"
+    )
+
     {:ok, [session]} = Workspace.list_tmux_sessions("build-1")
 
     assert session.server == "jx"
@@ -633,7 +639,8 @@ defmodule JX.WorkspaceTest do
   test "list_tmux_panes inventories panes with classified activity" do
     Process.put(
       :fake_ssh_tmux_panes,
-      "manual-session\t1\t2\t%7\t1\t/dev/pts/2\t2.1.118\t/srv/repos/saysure\tDebug failing CI tests\n" <>
+      "/Users/developer/.profile: line 15: zmodload: command not found\n" <>
+        "manual-session\t1\t2\t%7\t1\t/dev/pts/2\t2.1.118\t/srv/repos/saysure\tDebug failing CI tests\n" <>
         "manual-session\t1\t3\t%8\t0\t/dev/pts/3\tssh\t/srv/repos/saysure\tRemote shell\n"
     )
 

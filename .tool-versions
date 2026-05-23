@@ -1,2 +1,7 @@
 erlang 28.4.2
 elixir 1.19.5-otp-28
+
+# Zig is required for Burrito standalone binary builds (BURRITO_BUILD=1).
+# Currently blocked by a Zig → macOS SDK linker error; tracked as a bug.
+# Pinning the known-good version so the toolchain is ready when fixed.
+zig 0.15.2

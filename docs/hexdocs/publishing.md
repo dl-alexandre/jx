@@ -87,8 +87,18 @@ Configured targets:
 - `linux` for Linux x86_64
 - `linux_aarch64` for Linux arm64
 
-Burrito output is experimental until each target is built on a suitable runner
-and smoke-tested with `jx version` and `jx status`.
+Burrito output is currently blocked because Burrito 1.5 hard-requires Zig
+**0.15.2** (`Burrito.check_zig_version/0`) and the active development toolchain
+has 0.16.0. The repo's `.tool-versions` now pins `zig 0.15.2` so `mise install`
+or `asdf install` will provide the correct version.
+
+Once a developer builds with the pinned Zig, any further macOS SDK / linker
+issues during `Burrito.wrap/1` can be diagnosed and fixed. The release
+definition still declares the targets (`macos`, `macos_intel`, `linux`,
+`linux_aarch64`).
+
+Tracked as a bug; until resolved, the reliable distribution path is
+`mix escript.build` (requires Erlang/OTP 28 at runtime).
 
 ## Continuous Integration
 

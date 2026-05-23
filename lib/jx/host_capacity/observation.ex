@@ -10,6 +10,8 @@ defmodule JX.HostCapacity.Observation do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{}
+
   schema "host_capacity_observations" do
     field(:host_name, :string)
     field(:active_sessions, :integer, default: 0)

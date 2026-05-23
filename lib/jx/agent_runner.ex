@@ -7,14 +7,15 @@ defmodule JX.AgentRunner do
   alias JX.Tasks.Task
   alias JX.Tmux
 
-  @agent_names ~w(claude opencode codex)
+  @agent_names ~w(claude opencode codex grok)
   @agent_transports ~w(native acpx)
   @default_agent_transport "native"
 
   @default_binaries %{
     "claude" => "claude",
     "opencode" => "opencode",
-    "codex" => "codex"
+    "codex" => "codex",
+    "grok" => "scripts/grok"
   }
 
   @default_templates %{
@@ -22,7 +23,9 @@ defmodule JX.AgentRunner do
     "opencode" =>
       "{{agent_bin}} run --dir {{worktree_path}} --dangerously-skip-permissions \"Read the attached prompt file and complete the task.\" --file {{prompt_path}}",
     "codex" =>
-      "{{agent_bin}} exec --dangerously-bypass-approvals-and-sandbox -C {{worktree_path}} - < {{prompt_path}}"
+      "{{agent_bin}} exec --dangerously-bypass-approvals-and-sandbox -C {{worktree_path}} - < {{prompt_path}}",
+    "grok" =>
+      "{{agent_bin}} --dir {{worktree_path}} --dangerously-skip-permissions --prompt-file {{prompt_path}}"
   }
 
   @default_codex_goal_template "{{agent_bin}} --enable goals --dangerously-bypass-approvals-and-sandbox --no-alt-screen -C {{worktree_path}}"

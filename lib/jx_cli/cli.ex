@@ -9,6 +9,7 @@ defmodule JX.CLI do
   alias JX.CLI.Agents, as: AgentsCLI
   alias JX.CLI.Approvals, as: ApprovalsCLI
   alias JX.CLI.Assignments, as: AssignmentsCLI
+  alias JX.CLI.Campaign, as: CampaignCLI
   alias JX.CLI.Cleanup, as: CleanupCLI
   alias JX.CLI.Dashboard, as: DashboardCLI
   alias JX.CLI.DevIDE, as: DevIDECLI
@@ -85,6 +86,8 @@ defmodule JX.CLI do
   defp dispatch(["hosts" | args]), do: HostCLI.run_plural(args, start_app: &start_app/0)
 
   defp dispatch(["project" | args]), do: ProjectCLI.run(args, start_app: &start_app/0)
+
+  defp dispatch(["campaign" | args]), do: CampaignCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["promote", "preflight", name | args]) do
     {opts, rest, invalid} =
@@ -1365,7 +1368,7 @@ defmodule JX.CLI do
     else
       "" ->
         {:error,
-         "usage: jx assign <project> \"<task prompt>\" [--host <host>] [--agent claude|opencode|codex] [--transport native|acpx] [--goal] [--goal-objective <objective>]"}
+         "usage: jx assign <project> \"<task prompt>\" [--host <host>] [--agent claude|opencode|codex|grok] [--transport native|acpx] [--goal] [--goal-objective <objective>]"}
 
       other ->
         other
@@ -4162,9 +4165,18 @@ defmodule JX.CLI do
   defp put_present(attrs, _key, nil), do: attrs
   defp put_present(attrs, key, value), do: Map.put(attrs, key, value)
 
-  defp configure_db(nil), do: :ok
+  defp configure_db(nil) do
+    # Fall back to JX_DB env var so it works reliably for escripts
+    # (the config.exs System.get_env is evaluated at build time).
+    case System.get_env("JX_DB") do
+      nil -> :ok
+      path -> do_configure_db(path)
+    end
+  end
 
-  defp configure_db(path) do
+  defp configure_db(path), do: do_configure_db(path)
+
+  defp do_configure_db(path) do
     config =
       :jx
       |> Application.get_env(JX.Repo, [])
@@ -7233,6 +7245,7 @@ defmodule JX.CLI do
       "runners" => RunnersCLI.usage_lines(),
       "runtimes" => RuntimesCLI.usage_lines(),
       "assignments" => AssignmentsCLI.usage_lines(),
+      "campaign" => CampaignCLI.usage_lines(),
       "call" => [call_usage()],
       "cleanup" => CleanupCLI.usage_lines(),
       "ci" => [ci_usage()],

@@ -12,6 +12,7 @@
 
 # Temporary files, for example, from tests.
 /tmp/
+/.jx/campaigns/
 
 # Test support artifacts for stale beam cleaner.
 /.test.corrupt-stale-beams/

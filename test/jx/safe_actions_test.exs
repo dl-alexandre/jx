@@ -8,6 +8,8 @@ defmodule JX.SafeActionsTest do
   alias JX.CLI
   alias JX.DevIDE.Client
   alias JX.DevIDE.WorkspaceSnapshot
+  alias JX.HostCapacity.Observation
+  alias JX.OperationalLeases.Lease
   alias JX.OperationExecutions.OperationExecution
   alias JX.OrchestrationActions.OrchestrationAction
   alias JX.Repo
@@ -681,6 +683,8 @@ defmodule JX.SafeActionsTest do
   end
 
   defp cleanup_state do
+    Repo.delete_all(Lease)
+    Repo.delete_all(Observation)
     Repo.delete_all(ExecutionEvent)
     Repo.delete_all(OperationExecution)
     Repo.delete_all(OrchestrationAction)

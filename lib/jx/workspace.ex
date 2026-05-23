@@ -5991,7 +5991,7 @@ defmodule JX.Workspace do
 
   defp absolute_path_or_empty(_path), do: ""
 
-  defp session_agent_name(%{kind: kind}) when kind in ["claude", "opencode", "codex"], do: kind
+  defp session_agent_name(%{kind: kind}) when kind in ["claude", "opencode", "codex", "grok"], do: kind
   defp session_agent_name(_session), do: "claude"
 
   defp prompt_hash_scope(project, agent_name, "native"), do: "#{project.slug}:#{agent_name}"
@@ -6566,35 +6566,63 @@ defmodule JX.Workspace do
 
     output
     |> String.split("\n", trim: true)
-    |> Enum.map(&parse_tmux_session(&1, server_field?, server))
+    |> Enum.flat_map(fn line ->
+      if String.contains?(line, "\t") do
+        case parse_tmux_session(line, server_field?, server) do
+          nil ->
+            maybe_debug_dropped_tmux_line("session", line)
+            []
+
+          session ->
+            [session]
+        end
+      else
+        maybe_debug_dropped_tmux_line("session", line)
+        []
+      end
+    end)
   end
 
   defp parse_tmux_session(line, false, server) do
-    [name, created, attached, windows, current_path] =
-      case String.split(line, "\t", parts: 5) do
-        [name, created, attached, windows, current_path] ->
-          [name, created, attached, windows, current_path]
+    case String.split(line, "\t", parts: 5) do
+      [name, created, attached, windows, current_path] ->
+        %{
+          server: server,
+          name: name,
+          created_at: parse_unix_time(created),
+          attached: parse_integer(attached) || 0,
+          windows: parse_integer(windows) || 0,
+          current_path: current_path
+        }
 
-        [name, created, attached, windows] ->
-          [name, created, attached, windows, ""]
-      end
+      [name, created, attached, windows] ->
+        %{
+          server: server,
+          name: name,
+          created_at: parse_unix_time(created),
+          attached: parse_integer(attached) || 0,
+          windows: parse_integer(windows) || 0,
+          current_path: ""
+        }
 
-    %{
-      server: server,
-      name: name,
-      created_at: parse_unix_time(created),
-      attached: parse_integer(attached) || 0,
-      windows: parse_integer(windows) || 0,
-      current_path: current_path
-    }
+      _ ->
+        nil
+    end
   end
 
   defp parse_tmux_session(line, true, _server) do
-    [server, rest] = String.split(line, "\t", parts: 2)
+    case String.split(line, "\t", parts: 2) do
+      [server, rest] ->
+        rest
+        |> parse_tmux_session(false, server)
+        |> then(fn
+          nil -> nil
+          session -> Map.put(session, :server, server)
+        end)
 
-    rest
-    |> parse_tmux_session(false, server)
-    |> Map.put(:server, server)
+      _ ->
+        nil
+    end
   end
 
   defp parse_tmux_panes(output, opts) do
@@ -6603,40 +6631,79 @@ defmodule JX.Workspace do
 
     output
     |> String.split("\n", trim: true)
-    |> Enum.map(&parse_tmux_pane(&1, server_field?, server))
+    |> Enum.flat_map(fn line ->
+      if String.contains?(line, "\t") do
+        case parse_tmux_pane(line, server_field?, server) do
+          nil ->
+            maybe_debug_dropped_tmux_line("pane", line)
+            []
+
+          pane ->
+            [pane]
+        end
+      else
+        maybe_debug_dropped_tmux_line("pane", line)
+        []
+      end
+    end)
   end
 
   defp parse_tmux_pane(line, false, server) do
-    [session, window, pane, pane_id, active, tty, command, current_path, title] =
-      case String.split(line, "\t", parts: 9) do
-        [session, window, pane, pane_id, active, tty, command, current_path, title] ->
-          [session, window, pane, pane_id, active, tty, command, current_path, title]
+    case String.split(line, "\t", parts: 9) do
+      [session, window, pane, pane_id, active, tty, command, current_path, title] ->
+        %{
+          server: server,
+          session: session,
+          window: parse_integer(window) || 0,
+          pane: parse_integer(pane) || 0,
+          pane_id: pane_id,
+          active: active == "1",
+          tty: tty,
+          kind: pane_kind(command, title),
+          command: command,
+          current_path: current_path,
+          title: title
+        }
 
-        [session, window, pane, pane_id, active, tty, command, current_path] ->
-          [session, window, pane, pane_id, active, tty, command, current_path, ""]
-      end
+      [session, window, pane, pane_id, active, tty, command, current_path] ->
+        %{
+          server: server,
+          session: session,
+          window: parse_integer(window) || 0,
+          pane: parse_integer(pane) || 0,
+          pane_id: pane_id,
+          active: active == "1",
+          tty: tty,
+          kind: pane_kind(command, ""),
+          command: command,
+          current_path: current_path,
+          title: ""
+        }
 
-    %{
-      server: server,
-      session: session,
-      window: parse_integer(window) || 0,
-      pane: parse_integer(pane) || 0,
-      pane_id: pane_id,
-      active: active == "1",
-      tty: tty,
-      kind: pane_kind(command, title),
-      command: command,
-      current_path: current_path,
-      title: title
-    }
+      _ ->
+        nil
+    end
   end
 
   defp parse_tmux_pane(line, true, _server) do
-    [server, rest] = String.split(line, "\t", parts: 2)
+    case String.split(line, "\t", parts: 2) do
+      [server, rest] ->
+        rest
+        |> parse_tmux_pane(false, server)
+        |> then(fn
+          nil -> nil
+          pane -> Map.put(pane, :server, server)
+        end)
 
-    rest
-    |> parse_tmux_pane(false, server)
-    |> Map.put(:server, server)
+      _ ->
+        nil
+    end
+  end
+
+  defp maybe_debug_dropped_tmux_line(kind, line) do
+    if System.get_env("JX_DEBUG") in ["1", "true", "TRUE", "yes", "YES"] do
+      IO.warn("jx: dropped malformed tmux #{kind} line: #{inspect(line)}")
+    end
   end
 
   defp pane_kind(command, title) do
