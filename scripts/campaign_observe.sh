@@ -2,9 +2,12 @@
 #
 # campaign_observe.sh
 #
-# Thin observation loop command for the onebackend-v3-e14 campaign.
-# It syncs canonical state, runs host-scoped dry-run ticks on runnable hosts,
-# and prints canonical status/events. It never runs --apply.
+# Example observation loop for a jx campaign.
+# This version was written for the OneBackend-v3 E14 campaign and is
+# intentionally specific. Adapt for your own multi-host setup.
+#
+# It syncs canonical state, runs host-scoped dry-run ticks, and reports status.
+# It never runs --apply.
 #
 
 set -euo pipefail

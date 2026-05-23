@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 #
-# Read-only status for the active OneBackend-v3 E14 campaign lanes.
-# Reports per-host tmux sessions, campaign log sizes/exit markers, and git
-# worktree change counts for the current non-advanced lanes.
+# Read-only status for OneBackend-v3 E14 campaign lanes (active or advanced).
+#
+# Reports per-host tmux sessions, campaign log freshness/exit markers, and
+# git worktree state. Supports active lanes (default), advanced lanes (--advanced),
+# or all lanes (--all). This is the primary inspection tool for the merge-assistance phase.
 #
 
 CAMPAIGN="${CAMPAIGN:-onebackend-v3-e14}"
@@ -16,13 +18,26 @@ RUNNABLE_LINES=(
   "milcmini:/opt/homebrew/bin/tmux"
   "optiplex-xe2-local:/usr/bin/tmux"
   "uitestserver:/usr/bin/tmux"
+  "ideapad:/usr/bin/tmux"
 )
+
+# Filter mode for which slots to inspect: "active" (default), "advanced", or "all"
+FILTER_MODE="active"
+ONLY_HOST=""
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0")
+Usage: $(basename "$0") [--advanced | --all | --active] [--only <host>] [--campaign <name>]
 
-Prints a read-only status summary for current runnable campaign lanes.
+  --active     (default) Report only non-advanced (still active) lanes
+  --advanced   Report only advanced lanes (the post-completion / merge phase lanes)
+  --all        Report both active and advanced lanes
+
+  --only <host>   Limit output to a single SSH host (testserver, milcmini, ...)
+  --campaign <n>  Override campaign name (default: onebackend-v3-e14)
+
+Prints a read-only status summary useful for both active observation and
+post-advance merge assistance.
 EOF
 }
 
@@ -39,27 +54,46 @@ copy_state() {
 host_worktrees() {
   local state="$1"
   local host="$2"
+  local mode="${3:-active}"
 
-  python3 - "$state" "$host" <<'PY'
+  python3 - "$state" "$host" "$mode" <<'PY'
 import json
 import sys
 
-path, host = sys.argv[1:3]
+path, host, mode = sys.argv[1:4]
 state = json.load(open(path))
+
+def include(slot):
+    s = slot.get("status")
+    if mode == "active":
+        return s != "advanced"
+    elif mode == "advanced":
+        return s == "advanced"
+    else:  # all
+        return True
+
 paths = [
     slot.get("worktree_path", "")
     for slot in state.get("slots", [])
-    if slot.get("host_id") == host and slot.get("status") != "advanced"
+    if slot.get("host_id") == host and include(slot)
 ]
 print(":".join(p for p in paths if p))
 PY
 }
 
 main() {
-  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    usage
-    exit 0
-  fi
+  # Parse arguments
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --advanced) FILTER_MODE="advanced"; shift ;;
+      --all)      FILTER_MODE="all";      shift ;;
+      --active)   FILTER_MODE="active";   shift ;;
+      --only)     ONLY_HOST="${2:-}"; shift 2 ;;
+      --campaign) CAMPAIGN="${2:-}"; shift 2 ;;
+      -h|--help)  usage; exit 0 ;;
+      *)          echo "Unknown argument: $1" >&2; usage; exit 1 ;;
+    esac
+  done
 
   local state_tmp
   state_tmp=$(mktemp "${TMPDIR:-/tmp}/campaign-lane-state.XXXXXX")
@@ -69,18 +103,24 @@ main() {
   for entry in "${RUNNABLE_LINES[@]}"; do
     local host="${entry%%:*}"
     local tmux_bin="${entry#*:}"
-    local worktrees
-    worktrees=$(host_worktrees "$state_tmp" "$host")
 
-    printf '### %s\n' "$host"
+    if [[ -n "$ONLY_HOST" && "$host" != "$ONLY_HOST" ]]; then
+      continue
+    fi
+
+    local worktrees
+    worktrees=$(host_worktrees "$state_tmp" "$host" "$FILTER_MODE")
+
+    printf '### %s (mode=%s)\n' "$host" "$FILTER_MODE"
     ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "bash -s" <<REMOTE || true
 set -u
 tmux_bin='$tmux_bin'
 worktrees='$worktrees'
+filter_mode='$FILTER_MODE'
 
 echo 'sessions:'
 if [ -x "\$tmux_bin" ] || command -v "\$tmux_bin" >/dev/null 2>&1; then
-  "\$tmux_bin" list-sessions 2>/dev/null | grep '^e14-' || true
+  "\$tmux_bin" list-sessions 2>/dev/null | grep -E '^e14-|^[[:space:]]*e14-' || true
 else
   echo "tmux unavailable: \$tmux_bin"
 fi
@@ -105,7 +145,14 @@ done
 
 echo 'worktrees:'
 IFS=':' read -r -a dirs <<< "\$worktrees"
+if [ \${#dirs[@]} -eq 0 ]; then
+  echo "  (no worktrees for this host+filter)"
+fi
 for d in "\${dirs[@]}"; do
+  if [ ! -d "\$d" ]; then
+    printf '  %s  [MISSING DIRECTORY - only git registration remains]\\n' "\$d"
+    continue
+  fi
   git -C "\$d" rev-parse --is-inside-work-tree >/dev/null 2>&1 || continue
   branch=\$(git -C "\$d" branch --show-current)
   changes=\$(git -C "\$d" status --short | wc -l | tr -d ' ')

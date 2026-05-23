@@ -47,7 +47,7 @@ defmodule JX.HostCapacity.Evaluator do
   map:
 
       %{
-        host:                   "milcmini",
+        host:                   "host-a",
         observations_analysed:  42,
         avg_headroom_per_slot:  4096,       # MB
         avg_load_ratio:         0.45,       # fraction of total cores, nil if unavailable

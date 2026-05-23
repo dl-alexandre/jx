@@ -6,19 +6,18 @@ remain the workspace source of truth, and campaign state only tracks slots,
 issue cursors, PR links, and events.
 
 The campaign scope is the full issue/PR sequence configured in `issues`. The
-13 slots in the E14 campaign are only the current parallel lanes; they are not
-the campaign boundary. As lanes advance, historical `advanced` slot records stay
-in the JSON and replacement lane records are appended.
+configured number of parallel slots (e.g. 13) are only the *current* live lanes;
+they are not the campaign boundary. As lanes advance, historical `advanced`
+slot records stay in the JSON and replacement lane records are appended.
 
 ## Commands
 
 ```sh
-jx campaign init onebackend-v3-e14 --issues 1025..1153 --parallelism 13 --agent-mix grok,claude,codex --direction desc
-jx campaign seed onebackend-v3-e14 --from-existing-worktrees --branch-prefix onebackend-v3-
-jx campaign tick onebackend-v3-e14 --dry-run --repo owner/repo
-jx campaign tick onebackend-v3-e14 --apply --repo owner/repo
-jx campaign status onebackend-v3-e14
-jx campaign events onebackend-v3-e14
+jx campaign init <name> --issues <range-or-list> --parallelism <n> [--agent-mix ...]
+jx campaign seed <name> --from-existing-worktrees --branch-prefix <prefix>
+jx campaign tick <name> [--dry-run|--apply] [--repo owner/repo] [--host-id <id>]
+jx campaign status <name>
+jx campaign events <name>
 ```
 
 State is stored at `.jx/campaigns/<name>.json` and is ignored by git.
@@ -42,89 +41,82 @@ state, existing worktree paths are reused, and dry-run mode never writes state.
 remain. Total `.slots` can exceed `parallelism` after the first advancement
 because completed lane records remain as audit history.
 
-## Canonical State & Sync (Pass 1)
+## Canonical State & Multi-host Sync
 
-Because the campaign state is a single JSON file (`.jx/campaigns/onebackend-v3-e14.json`),
-all five OneBackend-v3 checkouts must stay in sync. The chosen canonical copy lives on
-`uitestserver`:
+When a campaign spans multiple machines, the single JSON file
+(`.jx/campaigns/<name>.json`) must be kept in sync across all participating
+hosts. One machine is designated as the *canonical* source. A small set of
+helper scripts (typically living alongside the campaign) are used to:
 
-```
-/home/developer/OneBackend-v3/.jx/campaigns/onebackend-v3-e14.json
-```
+- Detect drift between copies
+- Push updates from the canonical copy to the others
+- Pull a mutated copy from a runnable host back to canonical after an apply step
 
-### Sync script
+The sync helpers are intentionally kept outside the core `jx` binary so that
+each deployment can implement its own transport (rsync over SSH, git, etc.)
+while still using the same `jx campaign` primitives.
 
-A small helper keeps the five copies identical:
+See the scripts that accompany a real deployment for concrete examples of
+drift detection, host-scoped `jx campaign tick --host-id <id>`, and the
+safe "pull → validate → promote → push" lifecycle.
 
-```sh
-scripts/campaign_sync.sh status          # show drift
-scripts/campaign_sync.sh push --dry-run  # preview
-scripts/campaign_sync.sh push            # copy canonical to the other four hosts
-scripts/campaign_sync.sh pull optiplex-xe2-local --dry-run  # preview after a real --apply
-scripts/campaign_sync.sh pull optiplex-xe2-local            # promote that host's JSON to canonical
-scripts/campaign_pr_status.sh            # show open PRs for current non-advanced lanes
-scripts/campaign_lane_status.sh          # show agent session/log/worktree activity
-```
+## Observation & Operator Loops
 
-If the campaign was initially seeded with only the current lanes, expand the
-canonical issue cursor before the first real apply:
+A typical automated or human-supervised loop does the following (in order):
 
-```sh
-scripts/campaign_set_issues.sh --issues 1025..1153 --dry-run
-scripts/campaign_set_issues.sh --issues 1025..1153
-scripts/campaign_sync.sh push --dry-run
-scripts/campaign_sync.sh push
-```
+1. Ensure all hosts see a consistent view of the campaign JSON.
+2. Run `jx campaign tick --dry-run --host-id <host>` on every runnable host.
+3. Report PR status for currently active lanes.
+4. Report local session / log / git activity for agents that are working.
+5. Only after review: run the same tick commands with `--apply` (still scoped
+   to a single `--host-id`).
 
-For `onebackend-v3-e14`, the authoritative issue cursor was derived from
-GitHub issues labeled `epic:E14` and `area:animals`: 129 issues, `1153..1025`
-in descending execution order.
+The core `jx` tool never decides when to run `--apply` or which host to target;
+that decision belongs to the operator (human or scripted) that has visibility
+across all machines.
 
-### Observation loop
+## Real-world Deployment Example
 
-The scheduler/Grok operator should use the thin observation wrapper, not reimplement
-campaign logic in a prompt:
+For a concrete, production use of the campaign system (including the exact
+sync scripts, host map, observation loop, and Grok operator prompts used for
+one large campaign), see:
 
-```sh
-scripts/campaign_observe.sh                  # sync check + dry-run ticks on all runnable hosts
-scripts/campaign_observe.sh --only testserver # one host, useful during smoke tests
-```
+- `docs/dogfood/campaign_grok_operator.md`
+- `docs/dogfood/campaign_grok_pr_guardian.md`
+- The operational scripts under `scripts/campaign_*.sh` in that deployment
 
-`campaign_observe.sh` never runs `tick --apply`. It checks sync drift, prints explicit
-GitHub PR visibility for the current non-advanced lanes, previews the canonical push,
-runs host-scoped `jx campaign tick --dry-run --host-id <host>` on the runnable hosts,
-then prints canonical status and events.
+These files contain deployment-specific paths, host names, repository details,
+and runbooks. They are intentionally kept outside the generic documentation
+so that the public `jx` docs remain reusable across organizations.
 
-Use `campaign_lane_status.sh` alongside the observer while agents are still working.
-It does not mutate state; it only reports tmux sessions, log freshness/exit markers,
-and local git change counts for the active lanes.
+## Post-Advance / Merge Phase
 
-The definitive host → path map is embedded in the script (and duplicated in the table below
-for documentation). Run the sync tool from a control machine that can SSH to all five
-hosts; it treats the `uitestserver` JSON as the remote canonical source. Run it before and
-after observation or apply steps so that every `jx campaign tick --host-id <host>` sees a
-fresh, consistent view.
+When all unassigned issues have been processed, every lane eventually reaches `status: "advanced"`.
+At this point the campaign shifts from "create new work + open PRs" to "rebase, resolve conflicts, and merge the existing PRs".
 
-### Current sync map
+### New Tools for the Merge Phase
 
-| SSH host            | JSON path                                                            | Notes                     |
-|---------------------|----------------------------------------------------------------------|---------------------------|
-| uitestserver        | `/home/developer/OneBackend-v3/.jx/campaigns/onebackend-v3-e14.json` | Canonical source          |
-| testserver          | `/Users/developer/OneBackend-v3/.jx/campaigns/onebackend-v3-e14.json` | Runnable                  |
-| milcmini            | `/Users/milc/Documents/GitHub/OneBackend-v3/.jx/campaigns/onebackend-v3-e14.json` | Runnable      |
-| optiplex-xe2-local  | `/home/milc/Work/OneBackend-v3/.jx/campaigns/onebackend-v3-e14.json` | Runnable                  |
-| ideapad             | `/home/ideapad/Work/OneBackend-v3/.jx/campaigns/onebackend-v3-e14.json` | Synced for visibility  |
+- `scripts/campaign_lane_status.sh --advanced` (and `--all`)
+  - Now reports on completed lanes.
+  - Explicitly surfaces the "MISSING DIRECTORY" case (seen on milcmini).
 
-### Safe lifecycle (once real --apply begins)
+- `scripts/campaign_merge_assist.sh --host <name>`
+  - Primary tool for this phase.
+  - Consumes the canonical JSON + per-host conflict data.
+  - Emits a complete, copy-pasteable runbook with:
+    - Correct `git rebase origin/develop` commands (with special parent-repo handling for hosts whose worktrees have been removed).
+    - Post-rebase `gh pr review` / `gh pr merge --auto` suggestions.
+    - Hygiene steps (sync, prune stale registrations, etc.).
 
-1. On the control machine: `campaign_sync.sh status`
-2. On the target host: `jx campaign tick onebackend-v3-e14 --apply --host-id <host> ...`
-3. On the control machine: `campaign_sync.sh pull <host> --dry-run`
-4. On the control machine: `campaign_sync.sh pull <host>` (validates the target JSON, backs up canonical, then brings the result back as new truth)
-5. On the control machine: `campaign_sync.sh push --dry-run`
-6. On the control machine: `campaign_sync.sh push` (propagates the new truth)
+Always start any merge-assistance session with `./scripts/campaign_sync.sh status`.
 
-This makes every state mutation explicit and reviewable — exactly what is required before
-productionizing the 1-minute scheduler loop. Sync validation checks campaign identity,
-version, configured parallelism, and current lane count; it must not require total
-slot count to stay at 13 because the JSON is also the audit log for all advanced lanes.
+### Special Cases
+
+**milcmini (and similar hosts)**: The physical worktree directories for many advanced lanes may no longer exist on disk, even though `git worktree list` in the parent still shows registrations. The merge-assist script detects this and emits commands that operate from the parent checkout.
+
+### Operator Responsibilities
+
+The Grok operator **never** performs rebases, commits, pushes, or merges itself.
+Its job is to produce accurate, safe, host-specific command blocks that a human (or a short-lived fix-up agent session) can execute.
+
+When a campaign enters this phase, update the standing Grok prompt (`docs/dogfood/campaign_grok_operator.md`) with a "Merge Assistance for Advanced Lanes" section.

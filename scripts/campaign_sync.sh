@@ -2,13 +2,14 @@
 #
 # campaign_sync.sh
 #
-# Tiny, auditable helper for keeping the onebackend-v3-e14 campaign JSON
-# in sync across the five OneBackend-v3 checkouts (Pass 1 file-backed model).
+# Example multi-host JSON sync helper for a jx campaign.
+# This script is intentionally specific to one real deployment (OneBackend-v3 E14).
+# Copy and adapt it for your own campaign and host topology.
 #
-# Canonical source of truth:
+# Original canonical source:
 #   uitestserver:/home/developer/OneBackend-v3/.jx/campaigns/onebackend-v3-e14.json
 #
-# Usage:
+# Usage (historical):
 #   ./scripts/campaign_sync.sh status
 #   ./scripts/campaign_sync.sh push --dry-run
 #   ./scripts/campaign_sync.sh push
