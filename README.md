@@ -1,127 +1,113 @@
-# jido_orchestrator
+# jx — The Durable Backbone for Agentic Coding
 
-`jido_orchestrator` is the Hex package for `jx`, a durable terminal control
-plane for agent orchestration.
+[![License](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
+[![Elixir](https://img.shields.io/badge/elixir-%3E%3D1.19-8e4b9c.svg)](https://elixir-lang.org)
+[![Hex.pm](https://img.shields.io/hexpm/v/jido_orchestrator?color=8e4b9c)](https://hex.pm/packages/jido_orchestrator)
 
-`jx` does not replace Codex, Claude, opencode, tmux, SSH, or CI. It gives them
-an operational record: what sessions exist, what changed, what is blocked, what
-needs approval, and which actions are safe to take next.
+**jx** is the missing operating system layer for agents that live in terminals.
 
-## Install From Hex
+It does **not** replace Claude, Cursor, Codex, Aider, tmux, SSH, or CI.  
+It gives them something they currently lack: **durable, queryable, auditable state** across sessions, hosts, worktrees, and time.
+
+Think of it as **tmux + git + approvals + CI context**, but built for agents instead of humans.
+
+---
+
+## The Problem
+
+Agents today are stateless and amnesiac:
+
+- They lose context the moment a tmux pane is closed or a worktree is switched.
+- They have no shared memory of what was observed, approved, or blocked across machines.
+- They cannot safely coordinate when multiple agents (or multiple instances of the same agent) are working on the same codebase.
+- Reviewers and operators have almost no visibility into what the agent actually did.
+
+**jx** fixes this by turning the terminal into a first-class, persistent environment for agent work.
+
+---
+
+## What jx Gives You
+
+- Persistent hosts, projects, tasks, worktrees, and sessions
+- Compact, structured observations from tmux/SSH panes
+- Approval gates and safe-action policies before destructive or public actions
+- Cross-host coordination (including the new `jx campaign` system for large PR-driven efforts)
+- Full audit trail of decisions, handoffs, CI watches, and heartbeats
+- A powerful TUI (`jx tui`) for operators to stay on top of everything
+
+The durable record **is** the product.
+
+---
+
+## Quick Start
+
+### Install
 
 ```bash
+# Recommended (once we ship the installer)
+# curl -fsSL https://get.jx.run | sh
+
+# Current method
 mix escript.install hex jido_orchestrator
 jx --help
 ```
 
-GitHub release bundles are published at:
-
-```text
+GitHub releases (with launcher bundles) are available at:
 https://github.com/dl-alexandre/jido_orchestrator/releases
-```
 
-## First Run
-
-Create local state and register the local machine as an orchestration host:
+### 60-Second First Run
 
 ```bash
 jx init
 jx host add local --local --workspace /tmp/jx
 jx host doctor local --agent codex
-```
 
-Register a repository and launch bounded agent work:
-
-```bash
 jx project add my-app --host local --repo /path/to/my-app
 jx assign my-app "Investigate the failing import flow" --agent codex
-```
 
-Inspect live work and orchestrator health:
-
-```bash
 jx tui
-jx sessions queues --json
-jx project brief my-app --json
-jx orchestrator health --json
 ```
 
-Run orchestration in dry-run mode before allowing it to execute actions:
+From there you can run agents with full observation, approval gates, and cross-session memory.
 
-```bash
-jx orchestrator start --dry-run --replace
-jx orchestrate step --json
-```
+---
 
-## What It Is For
+## Key Features
 
-Use `jx` when useful agent state is spread across terminal scrollback, remote
-tmux panes, local branches, CI pages, and chat context.
+- **Campaigns** (`jx campaign`) — Coordinate large numbers of agent-driven PRs across multiple hosts with dry-run/apply semantics and canonical state syncing.
+- **Safety by default** — Destructive, public, or ambiguous actions require explicit approval or policy approval.
+- **Multi-host by design** — Works across local machines, VMs, and remote servers with consistent state.
+- **Agent-friendly** — Designed so agents can report observations, request approvals, and hand off work programmatically.
 
-It persists:
-
-- hosts, projects, tasks, worktrees, and runtime environments
-- tmux, SSH, and process-backed session inventory
-- compact terminal observations, profiles, queues, and watches
-- handoffs, wake triggers, CI watches, notifications, and timelines
-- approvals, safe actions, leases, assignments, and orchestrator heartbeats
-
-The durable record is the product. A session can move, block, finish, or need
-input, and `jx` can still compare the latest observation against saved
-objectives before surfacing or executing work.
-
-## Safety Model
-
-`jx` separates observation from execution. Inspection, queueing, profile updates,
-and dry-run planning are low-risk surfaces. Destructive, public, ambiguous, or
-externally visible actions are held behind approval and policy gates.
-
-Core invariants:
-
-- SSH is transport, not identity.
-- One task maps to one isolated workspace or session.
-- Append-only evidence is preferred over mutable state.
-- Adapters remain replaceable.
-- Safety is enforced by code and policy, not prompt convention.
+---
 
 ## Documentation
 
-HexDocs are the canonical long-form reference:
+Full documentation lives on HexDocs:
 
-```text
-https://hexdocs.pm/jido_orchestrator
-```
+→ https://hexdocs.pm/jido_orchestrator
 
-Source pages live under `docs/hexdocs/` and are grouped by `mix.exs`.
-
-Useful entry points:
-
-- [Overview](docs/hexdocs/overview.md)
-- [Installation](docs/hexdocs/installation.md)
+Particularly useful:
 - [Concepts](docs/hexdocs/concepts.md)
-- [CLI reference](docs/hexdocs/cli.md)
 - [Orchestration](docs/hexdocs/orchestration.md)
-- [Safety policy](docs/hexdocs/safety_policy.md)
-- [Publishing](docs/hexdocs/publishing.md)
+- [Safety Policy](docs/hexdocs/safety_policy.md)
+- [CLI Reference](docs/hexdocs/cli.md)
 
-Generate docs locally:
+---
 
-```bash
-mix deps.get
-mix docs
-```
+## Positioning
 
-## Naming Contract
+`jx` is the **durable execution and coordination layer** for agentic coding workflows.
 
-- Hex package: `jido_orchestrator`
-- GitHub repository: `dl-alexandre/jido_orchestrator`
-- Installed executable: `jx`
-- OTP app: `:jx`
-- Elixir modules: `JX.*`
+It sits *under* the LLMs and *above* the raw terminal, giving agents the same kind of operational backbone that human engineering teams get from good CI, good git hygiene, and good runbooks.
 
-## Development Checks
+---
 
-Run the release-facing checks:
+## Development
+
+See `ONBOARDING.md` for contributor setup.
+
+Run the full pre-publish gate:
 
 ```bash
 mix deps.get
@@ -134,21 +120,16 @@ mix hex.build
 mix precommit
 ```
 
-For local dogfooding, build the escript with `mix jx.build` (see below).
+---
 
-Build the local dogfood escript (recommended for contributors):
+## Status
 
-```bash
-mix jx.build          # or: MIX_ENV=prod mix escript.build
-bin/jx --help         # auto-uses ./jx if present (no env var needed)
-```
+`jx` is under active development. The core is stable enough for serious dogfooding, and we're currently hardening it for a proper 0.1.0 release and Hex publication.
 
-After building, `bin/jx` (and `./jx`) will prefer the fast, consistent escript binary.
-Use `JX_USE_MIX=1 bin/jx ...` only if you need to run against the live source during development.
+If you're building agent systems that live in terminals and you keep running into "the agent forgot what it was doing", `jx` is probably for you.
 
-Build the Rust launcher:
+---
 
-```bash
-cargo fmt --manifest-path crates/jx-launcher/Cargo.toml -- --check
-cargo build --manifest-path crates/jx-launcher/Cargo.toml --release --locked
-```
+**GitHub Topics**: `ai-agents`, `agentic-coding`, `orchestration`, `tmux`, `durable-execution`, `claude`, `cursor`
+
+(Repo maintainers: please add these in GitHub repository settings)
