@@ -3,6 +3,7 @@ defmodule JX.HostCapacity.CapacityPollerTest do
 
   import Ecto.Query, only: [from: 2]
 
+  alias JX.Directives.Directive
   alias JX.HostCapacity.CapacityPoller
   alias JX.HostCapacity.Observation
   alias JX.Hosts
@@ -10,10 +11,16 @@ defmodule JX.HostCapacity.CapacityPollerTest do
   alias JX.Repo
   alias JX.Tasks.Task, as: TaskRow
 
+  # No Ecto sandbox is in use: tests share one real SQLite DB and commit data.
+  # Before deleting hosts we must clear every table that FK-references hosts
+  # (projects, tasks, directives — all on_delete: :restrict), otherwise a
+  # directive row left behind by another test blocks `delete_all(Hosts.Host)`
+  # with a FOREIGN KEY constraint error. Repro before this fix: `--seed 1002`.
   setup do
     Repo.delete_all(Observation)
     Repo.delete_all(TaskRow)
     Repo.delete_all(Project)
+    Repo.delete_all(Directive)
     Repo.delete_all(Hosts.Host)
     :ok
   end
