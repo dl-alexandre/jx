@@ -6,6 +6,18 @@ defmodule JX.CLI.AgentTest do
   alias JX.CLI.Agent
 
   defmodule FakeWorkspace do
+    def record_agent_report(attrs) do
+      send(self(), {:record_agent_report, attrs})
+
+      {:ok,
+       %{
+         event_id: "ope-test",
+         kind: "agent.report.progress",
+         severity: "notice",
+         entity_id: attrs.session_id
+       }}
+    end
+
     def create_approval(attrs) do
       send(self(), {:create_approval, attrs})
 
@@ -97,15 +109,52 @@ defmodule JX.CLI.AgentTest do
            } = Jason.decode!(output)
   end
 
-  test "report returns an explicit not-implemented error rather than fabricating" do
+  test "report records a durable agent event" do
+    output =
+      capture_io(fn ->
+        assert :ok =
+                 Agent.run(
+                   [
+                     "report",
+                     "--session",
+                     "s1",
+                     "--task",
+                     "task-1",
+                     "--agent",
+                     "agent-1",
+                     "--kind",
+                     "progress",
+                     "--text",
+                     "rebased branch",
+                     "--json"
+                   ],
+                   start_app: start_app_callback(),
+                   workspace: FakeWorkspace
+                 )
+      end)
+
+    assert_received :started
+    assert_received {:record_agent_report, attrs}
+    assert attrs.session_id == "s1"
+    assert attrs.task_id == "task-1"
+    assert attrs.agent_id == "agent-1"
+    assert attrs.kind == "progress"
+    assert attrs.text == "rebased branch"
+
+    assert %{"status" => "recorded", "event_id" => "ope-test", "session_id" => "s1"} =
+             Jason.decode!(output)
+  end
+
+  test "report validates required flags before starting the app" do
     assert {:error, message} =
-             Agent.run(["report", "--session", "s1", "--text", "hi"],
+             Agent.run(["report", "--session", "s1"],
                start_app: start_app_callback(),
                workspace: FakeWorkspace
              )
 
-    assert message =~ "not yet implemented"
+    assert message == "missing required --text"
     refute_received :started
+    refute_received {:record_agent_report, _}
   end
 
   defp start_app_callback do

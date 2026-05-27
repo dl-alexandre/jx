@@ -10,11 +10,11 @@ defmodule JX.CLI.Agent do
   behaviour; today these commands call `Workspace` directly.
   """
 
-  import JX.CLI.Support, only: [expect_no_args: 2, print_json: 1]
+  import JX.CLI.Support, only: [expect_no_args: 2, print_json: 1, validate_options: 1]
 
   alias JX.Workspace
 
-  @report_usage "jx agent report --session <id> [--kind observation|error|progress] --text <text> [--json]"
+  @report_usage "jx agent report --session <id> [--task <id>] [--agent <id>] [--kind observation|progress|error|blocker] --text <text> [--json]"
   @request_approval_usage "jx agent request-approval --action <command> --reason <text> [--risk low|medium|high] [--json]"
   @status_usage "jx agent status [--project <name>] [--json]"
   @handoff_usage "jx agent handoff --to <operator|agent> --summary <text> [--context-ref <id>] [--json]"
@@ -29,15 +29,33 @@ defmodule JX.CLI.Agent do
     [@report_usage, @request_approval_usage, @status_usage, @handoff_usage]
   end
 
-  def run(["report" | _args], _opts) do
-    # `report` has no honest durable home yet: delegation evidence requires a
-    # command/cwd/exit_status (it is execution evidence, not a freeform note),
-    # and session observations are snapshot-based. Returning an error is more
-    # truthful than fabricating an observation id. See docs/architecture-evolution.md.
-    {:error,
-     "jx agent report is not yet implemented — needs a durable agent-observation primitive " <>
-       "(tracked in docs/architecture-evolution.md). Use `jx agent request-approval` or " <>
-       "`jx agent handoff` to record durable items today."}
+  def run(["report" | args], opts) do
+    {parsed, rest, invalid} =
+      OptionParser.parse(args,
+        strict: [
+          session: :string,
+          task: :string,
+          agent: :string,
+          kind: :string,
+          text: :string,
+          json: :boolean
+        ]
+      )
+
+    with :ok <- validate_options(invalid),
+         :ok <- expect_no_args(rest, @report_usage),
+         :ok <- require_flag(parsed[:session], "session"),
+         :ok <- require_flag(parsed[:text], "text"),
+         :ok <- start_app(opts) do
+      workspace(opts).record_agent_report(%{
+        session_id: parsed[:session],
+        task_id: parsed[:task] || "",
+        agent_id: parsed[:agent] || "",
+        kind: parsed[:kind] || "observation",
+        text: parsed[:text]
+      })
+      |> render_report(parsed[:json])
+    end
   end
 
   def run(["request-approval" | args], opts) do
@@ -149,6 +167,27 @@ defmodule JX.CLI.Agent do
 
   defp render_approval({:error, reason}, _json?, _human) do
     {:error, "could not record approval: #{inspect(reason)}"}
+  end
+
+  defp render_report({:ok, event}, json?) do
+    if json? do
+      print_json(%{
+        status: "recorded",
+        event_id: event.event_id,
+        kind: event.kind,
+        severity: event.severity,
+        session_id: event.entity_id
+      })
+    else
+      IO.puts("Agent report recorded (event: #{event.event_id})")
+      IO.puts("Session: #{event.entity_id}")
+    end
+
+    :ok
+  end
+
+  defp render_report({:error, reason}, _json?) do
+    {:error, "could not record agent report: #{inspect(reason)}"}
   end
 
   defp severity_for_risk(risk), do: Map.get(@risk_to_severity, risk, "warning")

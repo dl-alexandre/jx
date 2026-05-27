@@ -21,6 +21,7 @@ defmodule JX.Workspace do
   alias JX.CallHandoffs
   alias JX.CiDigest
   alias JX.CiWatches
+  alias JX.Command
   alias JX.ControlPlane
   alias JX.DelegatedExecution
   alias JX.DelegationPreflight
@@ -38,6 +39,7 @@ defmodule JX.Workspace do
   alias JX.Notifications
   alias JX.OperationExecutions
   alias JX.OperationPolicy
+  alias JX.OperationalEvents
   alias JX.OperationalEvents.Check, as: OperationalEventsCheck
   alias JX.OperationalLeases
   alias JX.OrchestrationActions
@@ -55,6 +57,7 @@ defmodule JX.Workspace do
   alias JX.ProjectMatcher
   alias JX.Projects
   alias JX.RepoDoctor
+  alias JX.Recap
   alias JX.RemoteSessions
   alias JX.ResourceOwnerships
   alias JX.SSHSessions
@@ -79,6 +82,11 @@ defmodule JX.Workspace do
   alias JX.Workspace.RepoGate
 
   @git_timeout_ms 2_000
+  @agent_report_kinds ~w(observation progress error blocker)
+  @active_task_statuses ~w(creating running)
+  @terminal_task_statuses ~w(completed failed stopped stale expired error)
+  @default_task_stale_after_seconds 6 * 60 * 60
+  @default_task_expire_after_seconds 48 * 60 * 60
 
   def add_host(attrs), do: Hosts.upsert_host(attrs)
 
@@ -317,6 +325,17 @@ defmodule JX.Workspace do
     end
   end
 
+  @doc """
+  Retrospective analysis of past runs over the durable record.
+
+  Unlike `portfolio_summary/1` (a live snapshot), this looks backward over
+  persisted tasks and observations: it clusters tasks into runs, flags
+  `running` tasks that went stale without a terminal state, reports
+  observation coverage per run (including *blind runs* with no observations),
+  and surfaces recoverable agent-attribution gaps. See `JX.Reflection`.
+  """
+  def reflect(opts \\ []), do: {:ok, JX.Reflection.reflect(opts)}
+
   def portfolio_summary(opts \\ []) do
     opts = Keyword.put_new(opts, :observe, true)
     limit = Keyword.get(opts, :limit, 25)
@@ -357,6 +376,56 @@ defmodule JX.Workspace do
   def approval_summary(opts \\ []), do: Approvals.summary(opts)
 
   def create_approval(attrs), do: Approvals.create(attrs)
+
+  def recap(opts \\ []), do: Recap.run(opts)
+
+  def record_agent_report(attrs) do
+    attrs = Map.new(attrs)
+    session_id = attrs |> Map.get(:session_id, Map.get(attrs, "session_id", "")) |> clean_text()
+    task_id = attrs |> Map.get(:task_id, Map.get(attrs, "task_id", "")) |> clean_text()
+    agent_id = attrs |> Map.get(:agent_id, Map.get(attrs, "agent_id", "")) |> clean_text()
+    kind = attrs |> Map.get(:kind, Map.get(attrs, "kind", "observation")) |> clean_text()
+    text = attrs |> Map.get(:text, Map.get(attrs, "text", "")) |> clean_text()
+
+    with :ok <- require_text(:session_id, session_id),
+         :ok <- require_text(:text, text),
+         :ok <- validate_agent_report_kind(kind) do
+      OperationalEvents.record(%{
+        source: "agent",
+        kind: "agent.report.#{kind}",
+        entity_type: "runner_session",
+        entity_id: session_id,
+        owner: agent_id,
+        severity: agent_report_severity(kind),
+        summary: agent_report_summary(kind, text),
+        payload: %{
+          session_id: session_id,
+          task_id: task_id,
+          agent_id: agent_id,
+          report_kind: kind,
+          text: text
+        }
+      })
+    end
+  end
+
+  defp require_text(field, ""), do: {:error, {:missing_required, field}}
+  defp require_text(_field, _value), do: :ok
+
+  defp validate_agent_report_kind(kind) when kind in @agent_report_kinds, do: :ok
+
+  defp validate_agent_report_kind(kind),
+    do: {:error, "unsupported agent report kind #{inspect(kind)}"}
+
+  defp agent_report_severity("error"), do: "warning"
+  defp agent_report_severity("blocker"), do: "critical"
+  defp agent_report_severity("progress"), do: "notice"
+  defp agent_report_severity(_kind), do: "info"
+
+  defp agent_report_summary(kind, text), do: "agent #{kind}: #{String.slice(text, 0, 220)}"
+
+  defp clean_text(nil), do: ""
+  defp clean_text(value), do: value |> to_string() |> String.trim()
 
   def acknowledge_approval(approval_id, opts \\ []), do: Approvals.acknowledge(approval_id, opts)
 
@@ -1404,6 +1473,25 @@ defmodule JX.Workspace do
   def list_statuses do
     Tasks.list_tasks()
     |> Enum.map(&status_for_task/1)
+  end
+
+  def reconcile_task_statuses(opts \\ []) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+    statuses = Keyword.get(opts, :statuses, @active_task_statuses)
+
+    results =
+      statuses
+      |> Tasks.list_tasks_by_status()
+      |> Enum.map(&status_for_task(&1, Keyword.put(opts, :now, now)))
+
+    {:ok,
+     %{
+       generated_at: now,
+       total: length(results),
+       updated: Enum.count(results, &task_reconciled?/1),
+       by_status: task_result_counts(results),
+       results: results
+     }}
   end
 
   def discover_sessions(opts \\ []) do
@@ -5956,9 +6044,18 @@ defmodule JX.Workspace do
   defp session_resume_id(_session), do: {:error, :resume_not_found}
 
   defp session_ps_output(%{host: "local"}) do
-    case System.cmd("ps", ["-axo", "pid,ppid,stat,tty,command"], stderr_to_stdout: true) do
-      {output, 0} -> {:ok, output}
-      {output, status} -> {:error, {:process_inventory_failed, status, output}}
+    case Command.run("ps", ["-axo", "pid,ppid,stat,tty,command"],
+           stderr_to_stdout: true,
+           timeout_ms: 5_000
+         ) do
+      {:ok, {output, 0}} ->
+        {:ok, output}
+
+      {:ok, {output, status}} ->
+        {:error, {:process_inventory_failed, status, output}}
+
+      {:error, {:command_timeout, _command, _args, timeout_ms}} ->
+        {:error, {:process_inventory_timeout, timeout_ms}}
     end
   end
 
@@ -6457,13 +6554,13 @@ defmodule JX.Workspace do
     Tasks.update_launch_command(task, launch_command)
   end
 
-  @capacity_snapshot_statuses ~w(completed failed stopped error)
+  @capacity_snapshot_statuses ~w(completed failed stopped stale expired error)
 
-  defp status_for_task(task) do
+  defp status_for_task(task, opts \\ []) do
     case SSH.adapter(task.host).run(task.host, Tmux.status_script(task)) do
       {:ok, output} ->
         {session_status, last_activity, exit_status} = parse_remote_status(output)
-        {status, last_error} = task_status(session_status, exit_status)
+        {status, last_error} = task_status(task, session_status, last_activity, exit_status, opts)
         {:ok, updated_task} = Tasks.update_status(task, status, last_error)
 
         if status in @capacity_snapshot_statuses do
@@ -6479,6 +6576,7 @@ defmodule JX.Workspace do
         }
 
       {:error, reason} ->
+        task = stale_task_on_remote_error(task, reason, opts)
         %{task: task, session_status: "unknown", last_activity: nil, error: reason}
     end
   end
@@ -6590,24 +6688,10 @@ defmodule JX.Workspace do
   defp parse_tmux_session(line, false, server) do
     case String.split(line, "\t", parts: 5) do
       [name, created, attached, windows, current_path] ->
-        %{
-          server: server,
-          name: name,
-          created_at: parse_unix_time(created),
-          attached: parse_integer(attached) || 0,
-          windows: parse_integer(windows) || 0,
-          current_path: current_path
-        }
+        build_tmux_session(server, name, created, attached, windows, current_path)
 
       [name, created, attached, windows] ->
-        %{
-          server: server,
-          name: name,
-          created_at: parse_unix_time(created),
-          attached: parse_integer(attached) || 0,
-          windows: parse_integer(windows) || 0,
-          current_path: ""
-        }
+        build_tmux_session(server, name, created, attached, windows, "")
 
       _ ->
         nil
@@ -6655,34 +6739,32 @@ defmodule JX.Workspace do
   defp parse_tmux_pane(line, false, server) do
     case String.split(line, "\t", parts: 9) do
       [session, window, pane, pane_id, active, tty, command, current_path, title] ->
-        %{
-          server: server,
-          session: session,
-          window: parse_integer(window) || 0,
-          pane: parse_integer(pane) || 0,
-          pane_id: pane_id,
-          active: active == "1",
-          tty: tty,
-          kind: pane_kind(command, title),
-          command: command,
-          current_path: current_path,
-          title: title
-        }
+        build_tmux_pane(
+          server,
+          session,
+          window,
+          pane,
+          pane_id,
+          active,
+          tty,
+          command,
+          current_path,
+          title
+        )
 
       [session, window, pane, pane_id, active, tty, command, current_path] ->
-        %{
-          server: server,
-          session: session,
-          window: parse_integer(window) || 0,
-          pane: parse_integer(pane) || 0,
-          pane_id: pane_id,
-          active: active == "1",
-          tty: tty,
-          kind: pane_kind(command, ""),
-          command: command,
-          current_path: current_path,
-          title: ""
-        }
+        build_tmux_pane(
+          server,
+          session,
+          window,
+          pane,
+          pane_id,
+          active,
+          tty,
+          command,
+          current_path,
+          ""
+        )
 
       _ ->
         nil
@@ -6704,6 +6786,63 @@ defmodule JX.Workspace do
     end
   end
 
+  defp build_tmux_session(server, name, created, attached, windows, current_path) do
+    with %DateTime{} = created_at <- parse_unix_time(created),
+         attached when is_integer(attached) <- parse_integer(attached),
+         windows when is_integer(windows) <- parse_integer(windows),
+         true <- String.trim(name) != "" do
+      %{
+        server: server,
+        name: name,
+        created_at: created_at,
+        attached: attached,
+        windows: windows,
+        current_path: current_path
+      }
+    else
+      _invalid -> nil
+    end
+  end
+
+  defp build_tmux_pane(
+         server,
+         session,
+         window,
+         pane,
+         pane_id,
+         active,
+         tty,
+         command,
+         current_path,
+         title
+       ) do
+    with window when is_integer(window) <- parse_integer(window),
+         pane when is_integer(pane) <- parse_integer(pane),
+         {:ok, active?} <- parse_tmux_bool(active),
+         true <- String.trim(session) != "",
+         true <- String.trim(pane_id) != "" do
+      %{
+        server: server,
+        session: session,
+        window: window,
+        pane: pane,
+        pane_id: pane_id,
+        active: active?,
+        tty: tty,
+        kind: pane_kind(command, title),
+        command: command,
+        current_path: current_path,
+        title: title
+      }
+    else
+      _invalid -> nil
+    end
+  end
+
+  defp parse_tmux_bool("1"), do: {:ok, true}
+  defp parse_tmux_bool("0"), do: {:ok, false}
+  defp parse_tmux_bool(_value), do: :error
+
   defp maybe_debug_dropped_tmux_line(kind, line) do
     if System.get_env("JX_DEBUG") in ["1", "true", "TRUE", "yes", "YES"] do
       IO.warn("jx: dropped malformed tmux #{kind} line: #{inspect(line)}")
@@ -6724,14 +6863,109 @@ defmodule JX.Workspace do
     end
   end
 
-  defp task_status(_session_status, 0), do: {"completed", ""}
+  defp task_status(_task, _session_status, _last_activity, 0, _opts), do: {"completed", ""}
 
-  defp task_status(_session_status, exit_status) when is_integer(exit_status) do
+  defp task_status(_task, _session_status, _last_activity, exit_status, _opts)
+       when is_integer(exit_status) do
     {"failed", "agent exited #{exit_status}"}
   end
 
-  defp task_status("running", nil), do: {"running", ""}
-  defp task_status(_session_status, nil), do: {"stopped", ""}
+  defp task_status(task, "running", last_activity, nil, opts) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+
+    if active_task?(task) and stale_heartbeat?(task, last_activity, now, opts) do
+      stale_age = task_heartbeat_age(task, last_activity, now)
+      {"stale", "no task heartbeat for #{stale_age}s"}
+    else
+      {"running", ""}
+    end
+  end
+
+  defp task_status(
+         %{status: status, last_error: last_error},
+         _session_status,
+         _last_activity,
+         nil,
+         _opts
+       )
+       when status in @terminal_task_statuses do
+    {status, last_error || ""}
+  end
+
+  defp task_status(task, _session_status, last_activity, nil, opts) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+    age = task_heartbeat_age(task, last_activity, now)
+
+    cond do
+      active_task?(task) and age >= expire_after_seconds(opts) ->
+        {"expired", "no session or exit status for #{age}s"}
+
+      active_task?(task) and age >= stale_after_seconds(opts) ->
+        {"stale", "no session or exit status for #{age}s"}
+
+      true ->
+        {"stopped", ""}
+    end
+  end
+
+  defp stale_task_on_remote_error(task, reason, opts) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+    age = task_heartbeat_age(task, nil, now)
+
+    if active_task?(task) and age >= stale_after_seconds(opts) do
+      status = if age >= expire_after_seconds(opts), do: "expired", else: "stale"
+      last_error = "status check failed after #{age}s: #{inspect(reason)}"
+
+      case Tasks.update_status(task, status, last_error) do
+        {:ok, updated_task} -> %{updated_task | host: task.host, project: task.project}
+        {:error, _changeset} -> task
+      end
+    else
+      task
+    end
+  end
+
+  defp task_reconciled?(%{task: task}) do
+    task.status in @terminal_task_statuses or task.status == "running"
+  end
+
+  defp task_reconciled?(_result), do: false
+
+  defp task_result_counts(results) do
+    results
+    |> Enum.map(& &1.task.status)
+    |> Enum.frequencies()
+  end
+
+  defp active_task?(%{status: status}), do: status in @active_task_statuses
+
+  defp stale_heartbeat?(task, last_activity, now, opts) do
+    task_heartbeat_age(task, last_activity, now) >= stale_after_seconds(opts)
+  end
+
+  defp task_heartbeat_age(task, last_activity, now) do
+    task
+    |> task_heartbeat_at(last_activity)
+    |> seconds_since(now)
+  end
+
+  defp task_heartbeat_at(%{updated_at: %DateTime{} = updated_at}, %DateTime{} = last_activity) do
+    Enum.max_by([updated_at, last_activity], &DateTime.to_unix/1)
+  end
+
+  defp task_heartbeat_at(_task, %DateTime{} = last_activity), do: last_activity
+  defp task_heartbeat_at(%{updated_at: %DateTime{} = updated_at}, _last_activity), do: updated_at
+  defp task_heartbeat_at(_task, _last_activity), do: DateTime.utc_now()
+
+  defp seconds_since(%DateTime{} = from, %DateTime{} = now) do
+    max(DateTime.diff(now, from, :second), 0)
+  end
+
+  defp stale_after_seconds(opts),
+    do: Keyword.get(opts, :stale_after_seconds, @default_task_stale_after_seconds)
+
+  defp expire_after_seconds(opts),
+    do: Keyword.get(opts, :expire_after_seconds, @default_task_expire_after_seconds)
 
   defp parse_unix_time(nil), do: nil
   defp parse_unix_time("0"), do: nil

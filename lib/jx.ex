@@ -36,6 +36,9 @@ defmodule JX do
   defdelegate repo_gate(project_name, opts \\ []), to: Workspace
   defdelegate assign_task(project_name, prompt, opts \\ []), to: Workspace
   defdelegate list_statuses(), to: Workspace
+  defdelegate reconcile_task_statuses(opts \\ []), to: Workspace
+  defdelegate recap(opts \\ []), to: Workspace
+  defdelegate record_agent_report(attrs), to: Workspace
   defdelegate list_sessions(opts \\ []), to: Workspace
   defdelegate snapshot_sessions(opts \\ []), to: Workspace
   defdelegate observe_sessions(opts \\ []), to: Workspace

@@ -3,9 +3,11 @@ defmodule JX.ProcessInventory do
   Read-only local process inventory for live agent and SSH sessions.
   """
 
+  alias JX.Command
   alias JX.Redaction
 
   @known_kinds ~w(codex claude opencode ssh sshd tmux)
+  @default_timeout_ms 5_000
 
   def known_kinds, do: @known_kinds
   def ps_script, do: "ps -axo pid,ppid,stat,tty,command"
@@ -13,13 +15,20 @@ defmodule JX.ProcessInventory do
   def list(opts \\ []) do
     kinds = Keyword.get(opts, :kinds, @known_kinds)
     all? = Keyword.get(opts, :all, false)
+    timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
 
-    case System.cmd("ps", ["-axo", "pid,ppid,stat,tty,command"], stderr_to_stdout: true) do
-      {output, 0} ->
+    case Command.run("ps", ["-axo", "pid,ppid,stat,tty,command"],
+           stderr_to_stdout: true,
+           timeout_ms: timeout_ms
+         ) do
+      {:ok, {output, 0}} ->
         {:ok, output |> parse_ps_output() |> filter(kinds: kinds, all: all?)}
 
-      {output, status} ->
+      {:ok, {output, status}} ->
         {:error, {:process_inventory_failed, status, output}}
+
+      {:error, {:command_timeout, _command, _args, timeout_ms}} ->
+        {:error, {:process_inventory_timeout, timeout_ms}}
     end
   end
 

@@ -123,6 +123,19 @@ defmodule JX.CLI.QueueTest do
     refute_received :operational_queue
   end
 
+  test "queue ls accepts blocker kind" do
+    capture_io(fn ->
+      assert :ok =
+               Queue.run(["ls", "--kind", "blocker"],
+                 start_app: start_app_callback(),
+                 workspace: FakeWorkspace
+               )
+    end)
+
+    assert_received {:operational_queue, opts}
+    assert opts[:kind] == "blocker"
+  end
+
   test "queue workspace routes workspace id and staleness window" do
     output =
       capture_io(fn ->

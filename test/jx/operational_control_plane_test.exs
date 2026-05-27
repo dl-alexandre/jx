@@ -214,6 +214,33 @@ defmodule JX.OperationalControlPlaneTest do
     assert timeline_output =~ "safe_action.executed"
   end
 
+  test "agent blocker reports surface as queue blockers" do
+    {:ok, event} =
+      Workspace.record_agent_report(%{
+        session_id: "session-1",
+        task_id: "task-1",
+        agent_id: "codex-1",
+        kind: "blocker",
+        text: "CSS lint failed on dashboard styles"
+      })
+
+    queue = Workspace.operational_queue(kind: "blocker", limit: 10)
+
+    assert [
+             %{
+               type: "blocker",
+               id: event_id,
+               risk: "blocked",
+               owner: "codex-1",
+               reason: "agent.report.blocker",
+               summary: "CSS lint failed on dashboard styles",
+               next: "jx task send task-1 \"<next step>\""
+             }
+           ] = queue.items
+
+    assert event_id == event.event_id
+  end
+
   test "lease expiration, release, and reassignment prevent stale ownership conflicts" do
     now = ~U[2026-05-09 20:00:00Z]
 
