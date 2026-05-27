@@ -9,7 +9,7 @@ defmodule JX.Tasks.Task do
   alias JX.Hosts.Host
   alias JX.Projects.Project
 
-  @statuses ~w(creating running completed failed stopped error)
+  @statuses ~w(creating running completed failed stopped stale expired error)
   @agent_transports ~w(native acpx)
 
   @type t :: %__MODULE__{}

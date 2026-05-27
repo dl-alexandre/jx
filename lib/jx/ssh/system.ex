@@ -6,16 +6,29 @@ defmodule JX.SSH.System do
   @behaviour JX.SSH
 
   alias JX.Hosts.Host
+  alias JX.Command
   alias JX.Shell
   alias JX.Tmux
 
   @ssh_options ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+  @default_timeout_ms 30_000
 
   @impl true
-  def run(%Host{} = host, script, _opts \\ []) do
-    case System.cmd("ssh", ssh_args(host, remote_sh(script)), stderr_to_stdout: true) do
-      {output, 0} -> {:ok, output}
-      {output, status} -> {:error, {:ssh_failed, status, output}}
+  def run(%Host{} = host, script, opts \\ []) do
+    timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
+
+    case Command.run("ssh", ssh_args(host, remote_sh(script)),
+           stderr_to_stdout: true,
+           timeout_ms: timeout_ms
+         ) do
+      {:ok, {output, 0}} ->
+        {:ok, output}
+
+      {:ok, {output, status}} ->
+        {:error, {:ssh_failed, status, output}}
+
+      {:error, {:command_timeout, _command, _args, timeout_ms}} ->
+        {:error, {:ssh_timeout, timeout_ms}}
     end
   end
 

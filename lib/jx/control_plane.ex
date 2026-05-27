@@ -248,6 +248,7 @@ defmodule JX.ControlPlane do
     items =
       []
       |> Kernel.++(workspace_items(now, stale_after_seconds))
+      |> Kernel.++(blocker_items(now, stale_after_seconds))
       |> Kernel.++(approval_items(now, stale_after_seconds))
       |> Kernel.++(action_items(now, stale_after_seconds))
       |> Kernel.++(agent_items(now))
@@ -701,6 +702,63 @@ defmodule JX.ControlPlane do
       end
     end)
   end
+
+  defp blocker_items(now, stale_after_seconds) do
+    Event
+    |> where([event], event.kind == "agent.report.blocker" or event.severity == "critical")
+    |> order_by([event], desc: event.id)
+    |> limit(100)
+    |> Repo.all()
+    |> Enum.map(&blocker_queue_item(&1, now, stale_after_seconds))
+  end
+
+  defp blocker_queue_item(%Event{} = event, now, stale_after_seconds) do
+    payload = OperationalEvents.decode_payload(event)
+    evidence_at = event.inserted_at
+
+    %{
+      type: "blocker",
+      id: event.event_id,
+      workspace_id: event.workspace_id,
+      approval_id: event.approval_id,
+      action_id: event.action_id,
+      lease_id: event.lease_id,
+      status: "open",
+      risk: "blocked",
+      reason: event.kind,
+      freshness: freshness(evidence_at, now, stale_after_seconds),
+      urgency: event.severity,
+      urgency_rank: urgency_rank(event.severity),
+      owner: event.owner,
+      summary: blocker_summary(event, payload),
+      evidence_at: evidence_at,
+      updated_at: event.inserted_at,
+      next: blocker_next(event, payload)
+    }
+  end
+
+  defp blocker_summary(%Event{} = event, payload) do
+    text_field(payload, "text") || event.summary
+  end
+
+  defp blocker_next(%Event{} = event, payload) do
+    cond do
+      text_field(payload, "next_command") ->
+        text_field(payload, "next_command")
+
+      text_field(payload, "task_id") ->
+        "jx task send #{text_field(payload, "task_id")} \"<next step>\""
+
+      event.entity_type != "" and event.entity_id != "" ->
+        "jx timeline #{timeline_scope(event.entity_type)} #{event.entity_id}"
+
+      true ->
+        "jx timeline recent"
+    end
+  end
+
+  defp timeline_scope("runner_session"), do: "session"
+  defp timeline_scope(scope), do: scope
 
   defp approval_items(now, stale_after_seconds) do
     Approvals.list(status: "active", limit: 500)

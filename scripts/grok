@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+GROK_BIN="${GROK_BIN:-}"
+
+usage() {
+  cat >&2 <<'USAGE'
+usage: scripts/grok [options] <prompt>
+       scripts/grok [options] --prompt-file <path>
+
+Options:
+  --json                 Print the raw Grok JSON response.
+  --stream               Use streaming-json output.
+  --web                  Enable web search. Disabled by default.
+  --cwd <path>           Run Grok from a different working directory.
+  --model <id>           Select a Grok model.
+  --permission-mode <m>  Pass a headless permission mode.
+  --allow <rule>         Add a permission allow rule.
+  --deny <rule>          Add a permission deny rule.
+  --prompt-file <path>   Read the prompt from a file.
+  -h, --help             Show this help.
+
+Environment:
+  GROK_BIN               Override the Grok binary path.
+USAGE
+}
+
+find_grok() {
+  if [ -n "$GROK_BIN" ]; then
+    printf '%s\n' "$GROK_BIN"
+    return
+  fi
+
+  if command -v grok >/dev/null 2>&1; then
+    command -v grok
+    return
+  fi
+
+  if [ -x "$HOME/.grok/bin/grok" ]; then
+    printf '%s\n' "$HOME/.grok/bin/grok"
+    return
+  fi
+
+  printf '%s\n' "grok binary not found. Set GROK_BIN or install Grok CLI." >&2
+  exit 69
+}
+
+OUTPUT_FORMAT="json"
+PRINT_JSON=0
+WEB=0
+CWD="$ROOT"
+PROMPT_FILE=""
+PROMPT_PARTS=()
+ARGS=()
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --json)
+      PRINT_JSON=1
+      shift
+      ;;
+    --stream)
+      OUTPUT_FORMAT="streaming-json"
+      PRINT_JSON=1
+      shift
+      ;;
+    --web)
+      WEB=1
+      shift
+      ;;
+    --cwd)
+      if [ "$#" -lt 2 ]; then
+        printf '%s\n' "--cwd requires a path" >&2
+        exit 64
+      fi
+      CWD="$2"
+      shift 2
+      ;;
+    --model)
+      if [ "$#" -lt 2 ]; then
+        printf '%s\n' "--model requires an id" >&2
+        exit 64
+      fi
+      ARGS+=("--model" "$2")
+      shift 2
+      ;;
+    --permission-mode)
+      if [ "$#" -lt 2 ]; then
+        printf '%s\n' "--permission-mode requires a mode" >&2
+        exit 64
+      fi
+      ARGS+=("--permission-mode" "$2")
+      shift 2
+      ;;
+    --allow|--deny)
+      if [ "$#" -lt 2 ]; then
+        printf '%s requires a rule\n' "$1" >&2
+        exit 64
+      fi
+      ARGS+=("$1" "$2")
+      shift 2
+      ;;
+    --prompt-file)
+      if [ "$#" -lt 2 ]; then
+        printf '%s\n' "--prompt-file requires a path" >&2
+        exit 64
+      fi
+      PROMPT_FILE="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      while [ "$#" -gt 0 ]; do
+        PROMPT_PARTS+=("$1")
+        shift
+      done
+      ;;
+    -*)
+      printf 'unknown option: %s\n' "$1" >&2
+      usage
+      exit 64
+      ;;
+    *)
+      PROMPT_PARTS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ -n "$PROMPT_FILE" ] && [ "${#PROMPT_PARTS[@]}" -gt 0 ]; then
+  printf '%s\n' "use either <prompt> or --prompt-file, not both" >&2
+  exit 64
+fi
+
+if [ -z "$PROMPT_FILE" ] && [ "${#PROMPT_PARTS[@]}" -eq 0 ]; then
+  usage
+  exit 64
+fi
+
+GROK="$(find_grok)"
+CMD=("$GROK" "--cwd" "$CWD" "--output-format" "$OUTPUT_FORMAT")
+
+if [ "$WEB" -eq 0 ]; then
+  CMD+=("--disable-web-search")
+fi
+
+if [ "${#ARGS[@]}" -gt 0 ]; then
+  CMD+=("${ARGS[@]}")
+fi
+
+if [ -n "$PROMPT_FILE" ]; then
+  CMD+=("--prompt-file" "$PROMPT_FILE")
+else
+  PROMPT="${PROMPT_PARTS[*]}"
+  CMD+=("-p" "$PROMPT")
+fi
+
+if [ "$PRINT_JSON" -eq 1 ]; then
+  "${CMD[@]}"
+  exit $?
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+  printf '%s\n' "jq is required for clean text output; rerun with --json or install jq" >&2
+  exit 69
+fi
+
+"${CMD[@]}" | jq -r '.text'

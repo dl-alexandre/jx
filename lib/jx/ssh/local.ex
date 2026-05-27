@@ -5,13 +5,17 @@ defmodule JX.SSH.Local do
 
   @behaviour JX.SSH
 
+  alias JX.Command
   alias JX.Hosts.Host
   alias JX.Shell
   alias JX.Tmux
 
+  @default_timeout_ms 30_000
+
   @impl true
-  def run(%Host{}, script, _opts \\ []) do
+  def run(%Host{}, script, opts \\ []) do
     output_path = Path.join(System.tmp_dir!(), "jx-local-#{unique_id()}.log")
+    timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
 
     wrapped_script = """
     (
@@ -20,9 +24,15 @@ defmodule JX.SSH.Local do
     """
 
     try do
-      case System.cmd("sh", ["-lc", wrapped_script]) do
-        {_output, 0} -> {:ok, read_output(output_path)}
-        {_output, status} -> {:error, {:local_failed, status, read_output(output_path)}}
+      case Command.run("sh", ["-lc", wrapped_script], timeout_ms: timeout_ms) do
+        {:ok, {_output, 0}} ->
+          {:ok, read_output(output_path)}
+
+        {:ok, {_output, status}} ->
+          {:error, {:local_failed, status, read_output(output_path)}}
+
+        {:error, {:command_timeout, _command, _args, timeout_ms}} ->
+          {:error, {:local_timeout, timeout_ms}}
       end
     after
       File.rm(output_path)

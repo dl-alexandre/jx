@@ -101,7 +101,7 @@ defmodule JX.FanoutTest do
     assert assignment["state"] == "planned"
     assert assignment["excluded"] == false
     assert assignment["intent"]["branch"] == "test/auth-api-security-coverage"
-    assert assignment["resolved_environment"]["host"] == "milcmini"
+    assert assignment["resolved_environment"]["host"] == "host-a"
     assert assignment["resolved_environment"]["assignment_start_commit"] == nil
 
     assert File.dir?(Path.join([result.run_path, "reports", "auth-api-security", "accepted"]))

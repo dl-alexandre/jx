@@ -137,3 +137,24 @@ Always start with:
 ### Output Shape for Merge Assistance
 
 When the human asks “how do we clear the advanced lanes on X?”, reply with a compact status + the exact runbook or command block produced by the tools above. Never decide merge order or perform actions yourself.
+
+### E14 Drive-to-Zero Tracker & Filtered Runbooks (Long-Haul Specifics)
+
+For the specific OneBackend-v3 E14 campaign (129 advanced slots), the **central artifact** is the `/tmp/e14-merge-tracker.md` + `.json` (maintained by `/tmp/e14_drive_tools/refresh_e14_tracker.py`).
+
+- Always refresh the tracker after human batches (it preserves history + any "confirmed_at" fields the human has annotated in the JSON).
+- Use `campaign_merge_assist.sh --still-open-json /tmp/e14-still-open.json` (new flag) to emit **directly filtered clean runbooks** containing only still-open PRs for that host. This eliminates manual pruning and cross-check friction.
+- Realistic example (offline-capable via local JSONs):
+
+  ```sh
+  ./scripts/campaign_merge_assist.sh --host ideapad \
+    --json-file /tmp/e14-campaign-current.json \
+    --still-open-json /tmp/e14-still-open.json \
+    > /tmp/e14-batch-ideapad-$(date +%Y%m%d-%H%M%S).md 2>/tmp/gen.log
+  ```
+
+- The tracker MD contains the full current Drive-to-Zero Playbook + live counts (as of last refresh: 72 still-open E14 PRs).
+- Host priority in batches: fewest still-open first (ideapad, uitestserver, ...).
+- See `docs/dogfood/onebackend-v3-e14-campaign.md` for the full E14 tracker system description, current count, and cycle workflow.
+
+This keeps the operator strictly in the read-only / guidance role while the human drives the count to exactly zero.

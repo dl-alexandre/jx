@@ -98,7 +98,7 @@ At this point the campaign shifts from "create new work + open PRs" to "rebase, 
 
 - `scripts/campaign_lane_status.sh --advanced` (and `--all`)
   - Now reports on completed lanes.
-  - Explicitly surfaces the "MISSING DIRECTORY" case (seen on milcmini).
+  - Explicitly surfaces the "MISSING DIRECTORY" case (when a worktree was removed after the lane advanced).
 
 - `scripts/campaign_merge_assist.sh --host <name>`
   - Primary tool for this phase.
@@ -112,7 +112,7 @@ Always start any merge-assistance session with `./scripts/campaign_sync.sh statu
 
 ### Special Cases
 
-**milcmini (and similar hosts)**: The physical worktree directories for many advanced lanes may no longer exist on disk, even though `git worktree list` in the parent still shows registrations. The merge-assist script detects this and emits commands that operate from the parent checkout.
+**Hosts with aggressive worktree cleanup**: The physical worktree directories for many advanced lanes may no longer exist on disk, even though `git worktree list` in the parent still shows registrations. The merge-assist script detects this and emits commands that operate from the parent checkout.
 
 ### Operator Responsibilities
 
@@ -120,3 +120,5 @@ The Grok operator **never** performs rebases, commits, pushes, or merges itself.
 Its job is to produce accurate, safe, host-specific command blocks that a human (or a short-lived fix-up agent session) can execute.
 
 When a campaign enters this phase, update the standing Grok prompt (`docs/dogfood/campaign_grok_operator.md`) with a "Merge Assistance for Advanced Lanes" section.
+
+For a concrete long-running "drive-to-zero" instance (E14 on OneBackend-v3, 129 advanced slots), the operational tracker system lives in `/tmp/e14-merge-tracker.*` + `refresh_e14_tracker.py` + enhanced `--still-open-json` support on `campaign_merge_assist.sh`. See `docs/dogfood/onebackend-v3-e14-campaign.md` for the full playbook, current live count (72 as of latest), and the self-sustaining process used until the open PR count hits exactly 0. The same patterns (read-only runbooks, confirmation carry-over, fewest-first batching) can be reused for future campaigns.

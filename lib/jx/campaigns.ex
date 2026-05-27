@@ -3,23 +3,29 @@ defmodule JX.Campaigns do
   File-backed campaign orchestration for PR-gated worktree lanes.
   """
 
+  alias JX.Command
+
   @slot_active_statuses ~w(planned worktree_created agent_working)
   @campaign_version 1
+  @default_command_timeout_ms 30_000
 
   def init(name, opts \\ []) when is_binary(name) do
-    state = %{
-      "version" => @campaign_version,
-      "name" => name,
-      "created_at" => timestamp(),
-      "updated_at" => timestamp(),
-      "issues" =>
-        issue_sequence(Keyword.get(opts, :issues), Keyword.get(opts, :direction, "desc")),
-      "direction" => Keyword.get(opts, :direction, "desc"),
-      "parallelism" => Keyword.get(opts, :parallelism),
-      "agent_mix" => agent_mix(Keyword.get(opts, :agent_mix)),
-      "slots" => [],
-      "events" => []
-    }
+    state =
+      %{
+        "version" => @campaign_version,
+        "name" => name,
+        "created_at" => timestamp(),
+        "updated_at" => timestamp(),
+        "issues" =>
+          issue_sequence(Keyword.get(opts, :issues), Keyword.get(opts, :direction, "desc")),
+        "direction" => Keyword.get(opts, :direction, "desc"),
+        "parallelism" => Keyword.get(opts, :parallelism),
+        "agent_mix" => agent_mix(Keyword.get(opts, :agent_mix)),
+        "slots" => [],
+        "events" => [],
+        "confirmations" => []
+      }
+      |> enrich_state()
 
     write_state(state, opts)
     {:ok, state}
@@ -38,17 +44,41 @@ defmodule JX.Campaigns do
         end)
         |> touch()
         |> add_event("seeded", %{"source" => "existing_worktrees"})
+        |> enrich_state()
 
       write_state(seeded, opts)
       {:ok, seeded}
     end
   end
 
-  def status(name, opts \\ []) when is_binary(name), do: load_or_new(name, opts)
+  def status(name, opts \\ []) when is_binary(name) do
+    with {:ok, state} <- load_or_new(name, opts) do
+      {:ok, enrich_state(state)}
+    end
+  end
 
   def events(name, opts \\ []) when is_binary(name) do
     with {:ok, state} <- load_or_new(name, opts) do
       {:ok, Map.get(state, "events", [])}
+    end
+  end
+
+  def confirm(name, attrs, opts \\ []) when is_binary(name) and is_map(attrs) do
+    with {:ok, state} <- load_or_new(name, opts) do
+      confirmation =
+        attrs
+        |> normalize_confirmation_attrs()
+        |> Map.put("at", timestamp())
+
+      state =
+        state
+        |> Map.update("confirmations", [confirmation], &(&1 ++ [confirmation]))
+        |> add_event("confirmed", confirmation)
+        |> touch()
+        |> enrich_state()
+
+      write_state(state, opts)
+      {:ok, state}
     end
   end
 
@@ -61,7 +91,7 @@ defmodule JX.Campaigns do
       result_state = touch(advanced_state)
 
       if apply? do
-        write_state(result_state, opts)
+        write_state(enrich_state(result_state), opts)
       end
 
       {:ok,
@@ -70,7 +100,7 @@ defmodule JX.Campaigns do
          "mode" => if(apply?, do: "apply", else: "dry_run"),
          "detections" => detections,
          "actions" => actions,
-         "state" => result_state
+         "state" => enrich_state(result_state)
        }}
     end
   end
@@ -118,7 +148,8 @@ defmodule JX.Campaigns do
              issue_sequence(Keyword.get(opts, :issues), Keyword.get(opts, :direction, "desc")),
            "direction" => Keyword.get(opts, :direction, "desc"),
            "slots" => [],
-           "events" => []
+           "events" => [],
+           "confirmations" => []
          }}
     end
   end
@@ -126,7 +157,7 @@ defmodule JX.Campaigns do
   defp write_state(state, opts) do
     path = state_path(state["name"], opts)
     File.mkdir_p!(Path.dirname(path))
-    File.write!(path, Jason.encode!(state, pretty: true) <> "\n")
+    File.write!(path, Jason.encode!(enrich_state(state), pretty: true) <> "\n")
     :ok
   end
 
@@ -168,11 +199,18 @@ defmodule JX.Campaigns do
   defp agent_mix(value), do: String.split(value, ",", trim: true)
 
   defp list_worktrees(repo_root) do
-    case System.cmd("git", ["-C", repo_root, "worktree", "list", "--porcelain"],
-           stderr_to_stdout: true
+    case Command.run("git", ["-C", repo_root, "worktree", "list", "--porcelain"],
+           stderr_to_stdout: true,
+           timeout_ms: @default_command_timeout_ms
          ) do
-      {output, 0} -> {:ok, parse_worktrees(output)}
-      {output, status} -> {:error, {:git_worktree_list_failed, status, String.trim(output)}}
+      {:ok, {output, 0}} ->
+        {:ok, parse_worktrees(output)}
+
+      {:ok, {output, status}} ->
+        {:error, {:git_worktree_list_failed, status, String.trim(output)}}
+
+      {:error, {:command_timeout, _command, _args, timeout_ms}} ->
+        {:error, {:git_timeout, timeout_ms}}
     end
   end
 
@@ -308,8 +346,8 @@ defmodule JX.Campaigns do
 
     args = if repo, do: args ++ ["--repo", repo], else: args
 
-    case System.cmd("gh", args, stderr_to_stdout: true) do
-      {output, 0} ->
+    case Command.run("gh", args, stderr_to_stdout: true, timeout_ms: @default_command_timeout_ms) do
+      {:ok, {output, 0}} ->
         output
         |> Jason.decode()
         |> case do
@@ -318,8 +356,11 @@ defmodule JX.Campaigns do
           {:error, error} -> {:error, {:gh_json_decode_failed, Exception.message(error)}}
         end
 
-      {output, status} ->
+      {:ok, {output, status}} ->
         {:error, {:gh_pr_list_failed, status, String.trim(output)}}
+
+      {:error, {:command_timeout, _command, _args, timeout_ms}} ->
+        {:error, {:gh_timeout, timeout_ms}}
     end
   end
 
@@ -436,12 +477,13 @@ defmodule JX.Campaigns do
       true ->
         File.mkdir_p!(Path.dirname(worktree_path))
 
-        case System.cmd(
+        case Command.run(
                "git",
                ["-C", repo_root, "worktree", "add", "-B", slot["branch"], worktree_path, "HEAD"],
-               stderr_to_stdout: true
+               stderr_to_stdout: true,
+               timeout_ms: @default_command_timeout_ms
              ) do
-          {_output, 0} ->
+          {:ok, {_output, 0}} ->
             %{
               "slot_index" => slot["slot_index"],
               "action" => "created_worktree",
@@ -450,7 +492,7 @@ defmodule JX.Campaigns do
               "issue_number" => slot["issue_number"]
             }
 
-          {output, status} ->
+          {:ok, {output, status}} ->
             %{
               "slot_index" => slot["slot_index"],
               "action" => "blocked",
@@ -458,6 +500,16 @@ defmodule JX.Campaigns do
               "worktree_path" => worktree_path,
               "issue_number" => slot["issue_number"],
               "reason" => "git worktree add failed with #{status}: #{String.trim(output)}"
+            }
+
+          {:error, {:command_timeout, _command, _args, timeout_ms}} ->
+            %{
+              "slot_index" => slot["slot_index"],
+              "action" => "blocked",
+              "branch" => slot["branch"],
+              "worktree_path" => worktree_path,
+              "issue_number" => slot["issue_number"],
+              "reason" => "git worktree add timed out after #{timeout_ms}ms"
             }
         end
     end
@@ -508,6 +560,83 @@ defmodule JX.Campaigns do
     event = %{"type" => type, "at" => timestamp(), "data" => data}
     Map.update(state, "events", [event], &(&1 ++ [event]))
   end
+
+  defp enrich_state(state) do
+    state
+    |> Map.put_new("confirmations", [])
+    |> Map.put("summary", campaign_summary(state))
+    |> Map.put("next_actions", campaign_next_actions(state))
+  end
+
+  defp campaign_summary(state) do
+    slots = Map.get(state, "slots", [])
+
+    %{
+      "slots_total" => length(slots),
+      "by_status" => slots |> Enum.map(&(&1["status"] || "")) |> Enum.frequencies(),
+      "by_host" => slots |> Enum.map(&(&1["host_id"] || "")) |> Enum.frequencies(),
+      "prs" => Enum.count(slots, &present?(&1["pr_url"])),
+      "blocked" => Enum.count(slots, &(&1["status"] == "blocked")),
+      "ready" => Enum.count(slots, &(&1["status"] in ["pr_detected", "advanced"]))
+    }
+  end
+
+  defp campaign_next_actions(state) do
+    campaign_name = state["name"] || "<name>"
+
+    state
+    |> Map.get("slots", [])
+    |> Enum.flat_map(&slot_next_actions(&1, campaign_name))
+  end
+
+  defp slot_next_actions(%{"status" => "blocked"} = slot, _campaign_name) do
+    [
+      %{
+        "slot_index" => slot["slot_index"],
+        "branch" => slot["branch"],
+        "action" => "resolve_blocker",
+        "evidence" => slot["blocked_reason"] || ""
+      }
+    ]
+  end
+
+  defp slot_next_actions(%{"status" => "pr_detected"} = slot, campaign_name) do
+    [
+      %{
+        "slot_index" => slot["slot_index"],
+        "branch" => slot["branch"],
+        "action" => "advance_slot",
+        "command" => "jx campaign tick #{campaign_name} --apply"
+      }
+    ]
+  end
+
+  defp slot_next_actions(%{"status" => status} = slot, _campaign_name)
+       when status in ["planned", "worktree_created"] do
+    [
+      %{
+        "slot_index" => slot["slot_index"],
+        "branch" => slot["branch"],
+        "action" => "start_or_confirm_agent_work",
+        "worktree_path" => slot["worktree_path"] || ""
+      }
+    ]
+  end
+
+  defp slot_next_actions(_slot, _campaign_name), do: []
+
+  defp normalize_confirmation_attrs(attrs) do
+    %{
+      "slot_index" => Map.get(attrs, "slot_index", Map.get(attrs, :slot_index)),
+      "status" => Map.get(attrs, "status", Map.get(attrs, :status, "confirmed")),
+      "message" => Map.get(attrs, "message", Map.get(attrs, :message, ""))
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_value), do: false
 
   defp touch(state), do: Map.put(state, "updated_at", timestamp())
 

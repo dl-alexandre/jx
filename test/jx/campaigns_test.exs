@@ -53,6 +53,8 @@ defmodule JX.CampaignsTest do
 
     assert Enum.map(seeded["slots"], & &1["issue_number"]) == [1152, 1153]
     assert Enum.all?(seeded["slots"], &(&1["status"] == "agent_working"))
+    assert seeded["summary"]["slots_total"] == 2
+    assert seeded["summary"]["by_host"]["host-a"] == 2
 
     assert {:ok, reseeded} =
              Campaigns.seed_from_existing_worktrees("onebackend-v3-e14",
@@ -63,6 +65,29 @@ defmodule JX.CampaignsTest do
              )
 
     assert length(reseeded["slots"]) == 2
+  end
+
+  test "confirm records operator confirmation and derived next actions", ctx do
+    {:ok, _state} =
+      Campaigns.init("onebackend-v3-e14",
+        issues: "1151",
+        direction: "desc",
+        root: ctx.state_root
+      )
+
+    assert {:ok, confirmed} =
+             Campaigns.confirm(
+               "onebackend-v3-e14",
+               %{"slot_index" => 0, "message" => "batch reviewed", "status" => "ready"},
+               root: ctx.state_root
+             )
+
+    assert [%{"message" => "batch reviewed", "status" => "ready"}] =
+             confirmed["confirmations"]
+
+    assert [%{"type" => "confirmed"}] = confirmed["events"]
+    assert confirmed["summary"]["slots_total"] == 0
+    assert confirmed["next_actions"] == []
   end
 
   test "dry-run tick detects PRs without writing state and apply advances the slot once", ctx do
@@ -170,7 +195,10 @@ defmodule JX.CampaignsTest do
 
     assert {:ok, persisted} = Campaigns.status("onebackend-v3-e14", root: ctx.state_root)
     assert [%{"status" => "pr_detected", "host_id" => "host-a"}] = persisted["slots"]
-    refute File.exists?(Path.join(ctx.worktrees, "onebackend-v3-grok-1152"))
+    # host-b must not claim issue 1152 (which it does not own): no slot is created
+    # for it. The 1152 worktree dir itself is pre-seeded by setup/0, so its presence
+    # is not a usable signal here — assert on campaign state instead.
+    refute Enum.any?(persisted["slots"], &(&1["issue_number"] == 1152))
   end
 
   defp git!(repo, args) do

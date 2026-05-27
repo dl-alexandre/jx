@@ -613,6 +613,31 @@ defmodule JX.WorkspaceTest do
     assert status.exit_status == 0
   end
 
+  test "task reconciliation expires old running tasks with no session or exit status" do
+    Process.put(:fake_ssh_status_output, "stopped\n1700000000\nnone\n")
+
+    now = ~U[2026-05-26 00:00:00Z]
+    old_updated_at = DateTime.add(now, -7200, :second)
+
+    {:ok, task} = Workspace.assign_task("saysure", "expire missing session")
+    Repo.update_all(Task, set: [updated_at: old_updated_at])
+
+    {:ok, report} =
+      Workspace.reconcile_task_statuses(
+        now: now,
+        stale_after_seconds: 60,
+        expire_after_seconds: 3600
+      )
+
+    assert report.total == 1
+    assert report.by_status["expired"] == 1
+
+    [result] = report.results
+    assert result.task.task_id == task.task_id
+    assert result.task.status == "expired"
+    assert result.task.last_error =~ "no session or exit status"
+  end
+
   test "list_tmux_sessions reconstructs raw host tmux sessions" do
     Process.put(
       :fake_ssh_tmux_sessions,
@@ -636,6 +661,18 @@ defmodule JX.WorkspaceTest do
     assert session.server == "default"
   end
 
+  test "list_tmux_sessions drops tabbed shell noise with invalid numeric fields" do
+    Process.put(
+      :fake_ssh_tmux_sessions,
+      "noise\twith\ttabs\tthat\tlooks structured\n" <>
+        "real-session\t1700000000\t0\t1\t/srv/repos/saysure\n"
+    )
+
+    {:ok, [session]} = Workspace.list_tmux_sessions("build-1")
+
+    assert session.name == "real-session"
+  end
+
   test "list_tmux_panes inventories panes with classified activity" do
     Process.put(
       :fake_ssh_tmux_panes,
@@ -650,6 +687,19 @@ defmodule JX.WorkspaceTest do
              {"default", "manual-session", 1, 2, "claude"},
              {"default", "manual-session", 1, 3, "ssh"}
            ]
+  end
+
+  test "list_tmux_panes drops tabbed shell noise with invalid shape" do
+    Process.put(
+      :fake_ssh_tmux_panes,
+      "noise\twith\ttabs\tbad\tactive\t/dev/pts/2\tcodex\t/srv\tTitle\n" <>
+        "manual-session\t1\t2\t%7\t1\t/dev/pts/2\tcodex\t/srv/repos/saysure\tCodex\n"
+    )
+
+    {:ok, [pane]} = Workspace.list_tmux_panes("build-1")
+
+    assert pane.session == "manual-session"
+    assert pane.pane_id == "%7"
   end
 
   test "list_tmux_panes can scan all tmux servers on a host" do

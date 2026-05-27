@@ -10,6 +10,7 @@ defmodule JX.CLI do
   alias JX.CLI.Approvals, as: ApprovalsCLI
   alias JX.CLI.Assignments, as: AssignmentsCLI
   alias JX.CLI.Campaign, as: CampaignCLI
+  alias JX.CLI.Agent, as: AgentCLI
   alias JX.CLI.Cleanup, as: CleanupCLI
   alias JX.CLI.Dashboard, as: DashboardCLI
   alias JX.CLI.DevIDE, as: DevIDECLI
@@ -22,6 +23,7 @@ defmodule JX.CLI do
   alias JX.CLI.Orchestrator, as: OrchestratorCLI
   alias JX.CLI.Project, as: ProjectCLI
   alias JX.CLI.Queue, as: QueueCLI
+  alias JX.CLI.Recap, as: RecapCLI
   alias JX.CLI.Runners, as: RunnersCLI
   alias JX.CLI.Runtimes, as: RuntimesCLI
   alias JX.CLI.Session, as: SessionCLI
@@ -59,7 +61,7 @@ defmodule JX.CLI do
   def run(args) do
     {global_opts, args, invalid} =
       OptionParser.parse_head(args,
-        strict: [db: :string, help: :boolean],
+        strict: [db: :string, help: :boolean, version: :boolean],
         aliases: [h: :help]
       )
 
@@ -88,6 +90,12 @@ defmodule JX.CLI do
   defp dispatch(["project" | args]), do: ProjectCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["campaign" | args]), do: CampaignCLI.run(args, start_app: &start_app/0)
+
+  defp dispatch(["recap" | args]), do: RecapCLI.run(args, start_app: &start_app/0)
+
+  defp dispatch(["week" | args]), do: RecapCLI.run(args, start_app: &start_app/0)
+
+  defp dispatch(["agent" | args]), do: AgentCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["promote", "preflight", name | args]) do
     {opts, rest, invalid} =
@@ -345,6 +353,26 @@ defmodule JX.CLI do
   end
 
   defp dispatch(["portfolio" | _args]), do: {:error, "usage: #{portfolio_summary_usage()}"}
+
+  defp dispatch(["reflect" | args]) do
+    {opts, rest, invalid} =
+      OptionParser.parse(args,
+        strict: [
+          run_gap_minutes: :integer,
+          stale_running_minutes: :integer,
+          json: :boolean
+        ]
+      )
+
+    with :ok <- validate_options(invalid),
+         :ok <- expect_no_args(rest, reflect_usage()),
+         :ok <- start_app(),
+         {:ok, report} <-
+           Workspace.reflect(reflect_opts(opts)) do
+      print_reflection(report, json: opts[:json] || false)
+      :ok
+    end
+  end
 
   defp dispatch(["call", "brief" | args]) do
     {opts, rest, invalid} =
@@ -2120,9 +2148,37 @@ defmodule JX.CLI do
     end
   end
 
+  defp dispatch(["task", "reconcile" | args]) do
+    {opts, rest, invalid} =
+      OptionParser.parse(args,
+        strict: [
+          stale_after_seconds: :integer,
+          expire_after_seconds: :integer,
+          json: :boolean
+        ]
+      )
+
+    stale_after_seconds = opts[:stale_after_seconds] || 6 * 60 * 60
+    expire_after_seconds = opts[:expire_after_seconds] || 48 * 60 * 60
+
+    with :ok <- validate_options(invalid),
+         :ok <- expect_no_args(rest, task_reconcile_usage()),
+         :ok <- validate_positive("stale-after-seconds", stale_after_seconds),
+         :ok <- validate_positive("expire-after-seconds", expire_after_seconds),
+         :ok <- start_app(),
+         {:ok, report} <-
+           Workspace.reconcile_task_statuses(
+             stale_after_seconds: stale_after_seconds,
+             expire_after_seconds: expire_after_seconds
+           ) do
+      print_task_reconcile(report, json: opts[:json] || false)
+      :ok
+    end
+  end
+
   defp dispatch(["task" | _args]) do
     {:error,
-     "usage: #{task_adopt_tmux_usage()} | #{task_adopt_activity_usage()} | #{task_send_usage()}"}
+     "usage: #{task_adopt_tmux_usage()} | #{task_adopt_activity_usage()} | #{task_send_usage()} | #{task_reconcile_usage()}"}
   end
 
   defp dispatch(["attach", task_id]) do
@@ -2196,8 +2252,14 @@ defmodule JX.CLI do
     if DevIDECLI.requires_state?(args), do: start_app(), else: :ok
   end
 
-  defp help_args(global_opts, []), do: if(global_opts[:help], do: ["help"], else: [])
-  defp help_args(global_opts, args), do: if(global_opts[:help], do: ["help" | args], else: args)
+  defp help_args(global_opts, args) do
+    cond do
+      global_opts[:version] == true -> ["version"]
+      global_opts[:help] == true and args == [] -> ["help"]
+      global_opts[:help] == true -> ["help" | args]
+      true -> args
+    end
+  end
 
   defp dispatch_modes([], opts) do
     print_usage_modes(UsageModes.all(), json: opts[:json] || false)
@@ -2558,6 +2620,19 @@ defmodule JX.CLI do
     "jx portfolio summary [--host <host>] [--managed] [--all-processes] [--type <type>] [--ssh-target <target>] [--work-state <state>] [--control managed|ignored|protected|uncontrolled] [--no-observe] [--lines 80] [--scan-limit 100] [-n 25] [--json]"
   end
 
+  defp reflect_usage do
+    "jx reflect [--run-gap-minutes 30] [--stale-running-minutes 60] [--json]"
+  end
+
+  defp reflect_opts(opts) do
+    []
+    |> maybe_put(:run_gap_seconds, opts[:run_gap_minutes] && opts[:run_gap_minutes] * 60)
+    |> maybe_put(
+      :stale_running_seconds,
+      opts[:stale_running_minutes] && opts[:stale_running_minutes] * 60
+    )
+  end
+
   defp promotion_preflight_usage do
     "jx promote preflight <project> --from <source-branch> --to <target-branch> [--json]"
   end
@@ -2799,6 +2874,10 @@ defmodule JX.CLI do
 
   defp task_send_usage do
     "jx task send <task-id> \"<message>\" [--window 0] [--pane 0] [--no-enter]"
+  end
+
+  defp task_reconcile_usage do
+    "jx task reconcile [--stale-after-seconds 21600] [--expire-after-seconds 172800] [--json]"
   end
 
   defp print_inbox_delegation_reviews([]), do: :ok
@@ -4269,6 +4348,60 @@ defmodule JX.CLI do
     )
   end
 
+  defp print_task_reconcile(report, json: true) do
+    print_json(%{
+      generated_at: format_time(report.generated_at),
+      total: report.total,
+      updated: report.updated,
+      by_status: report.by_status,
+      results: Enum.map(report.results, &json_task_reconcile_result/1)
+    })
+  end
+
+  defp print_task_reconcile(report, json: false) do
+    IO.puts("task reconciliation")
+    IO.puts("checked: #{report.total}")
+    IO.puts("statuses: #{tally_to_string(report.by_status)}")
+
+    rows =
+      Enum.map(report.results, fn result ->
+        task = result.task
+
+        [
+          task.task_id,
+          task.status,
+          result.session_status,
+          format_time(result.last_activity),
+          format_optional_integer(result.exit_status),
+          truncate(task.last_error || task_reconcile_error(result), 64)
+        ]
+      end)
+
+    if rows != [] do
+      print_table(["TASK", "STATUS", "SESSION", "LAST_ACTIVITY", "EXIT", "EVIDENCE"], rows)
+    end
+  end
+
+  defp json_task_reconcile_result(result) do
+    task = result.task
+
+    %{
+      task_id: task.task_id,
+      status: task.status,
+      project: task.project && task.project.name,
+      host: task.host && task.host.name,
+      session_status: result.session_status,
+      last_activity: format_time(result.last_activity),
+      exit_status: result.exit_status,
+      last_error: task.last_error || "",
+      error: task_reconcile_error(result)
+    }
+  end
+
+  defp task_reconcile_error(%{error: nil}), do: ""
+  defp task_reconcile_error(%{error: error}), do: inspect(error)
+  defp task_reconcile_error(_result), do: ""
+
   defp goal_status_label(nil), do: "-"
   defp goal_status_label(%{"status" => status}) when status in [nil, ""], do: "-"
   defp goal_status_label(%{"status" => status}), do: status
@@ -5190,6 +5323,100 @@ defmodule JX.CLI do
     end
   rescue
     ArgumentError -> 0
+  end
+
+  defp print_reflection(report, opts) do
+    if opts[:json] do
+      print_json(report)
+    else
+      IO.puts("reflection")
+      IO.puts("generated: #{format_time(report.generated_at)}")
+      IO.puts("tasks: #{report.task_count}")
+      IO.puts("")
+
+      print_reflection_runs(report.runs)
+      print_reflection_lifecycle(report.lifecycle)
+      print_reflection_observations(report.observations)
+      print_reflection_attribution(report.attribution)
+    end
+  end
+
+  defp print_reflection_runs([]), do: IO.puts("runs: none")
+
+  defp print_reflection_runs(runs) do
+    IO.puts("runs (#{length(runs)}):")
+
+    rows =
+      runs
+      |> Enum.with_index(1)
+      |> Enum.map(fn {run, idx} ->
+        [
+          Integer.to_string(idx),
+          "#{format_time(run.started_at)} → #{format_time(run.ended_at)}",
+          Integer.to_string(run.task_count),
+          tally_to_string(run.agents),
+          tally_to_string(run.statuses),
+          Integer.to_string(run.observation_count) <> if(run.blind?, do: " (BLIND)", else: "")
+        ]
+      end)
+
+    print_table(["#", "window", "tasks", "agents", "statuses", "observations"], rows)
+    IO.puts("")
+  end
+
+  defp print_reflection_lifecycle(lifecycle) do
+    IO.puts("lifecycle:")
+    IO.puts("  by status: #{tally_to_string(lifecycle.by_status)}")
+    IO.puts("  terminal: #{lifecycle.terminal}")
+    IO.puts("  stale running (no recent update): #{lifecycle.stale_running_count}")
+
+    Enum.each(lifecycle.stale_running, fn t ->
+      hours = Float.round(t.age_seconds / 3600, 1)
+
+      IO.puts(
+        "    #{t.task_id} [#{t.agent_name}] #{t.branch} — idle #{hours}h since #{format_time(t.updated_at)}"
+      )
+    end)
+
+    IO.puts("")
+  end
+
+  defp print_reflection_observations(observations) do
+    IO.puts("observations: #{observations.total}")
+
+    rows =
+      Enum.map(observations.by_agent, fn row ->
+        [
+          row.agent_name || "(unattributed)",
+          Integer.to_string(row.count),
+          Integer.to_string(row.hosts),
+          "#{format_time(row.first_at)} → #{format_time(row.last_at)}"
+        ]
+      end)
+
+    print_table(["agent", "count", "hosts", "window"], rows)
+    IO.puts("")
+  end
+
+  defp print_reflection_attribution(%{recoverable_count: 0}) do
+    IO.puts("attribution gaps: none recoverable")
+  end
+
+  defp print_reflection_attribution(attribution) do
+    IO.puts("attribution gaps (recoverable from session name): #{attribution.recoverable_count}")
+
+    Enum.each(attribution.by_agent, fn row ->
+      IO.puts("  #{row.agent_name}: #{row.count} obs — #{Enum.join(row.sessions, ", ")}")
+    end)
+  end
+
+  defp tally_to_string(tally) when map_size(tally) == 0, do: "-"
+
+  defp tally_to_string(tally) do
+    tally
+    |> Enum.sort_by(fn {_k, v} -> -v end)
+    |> Enum.map(fn {k, v} -> "#{k || "(none)"}=#{v}" end)
+    |> Enum.join(" ")
   end
 
   defp print_portfolio_summary(summary, opts) do
@@ -7246,6 +7473,7 @@ defmodule JX.CLI do
       "runtimes" => RuntimesCLI.usage_lines(),
       "assignments" => AssignmentsCLI.usage_lines(),
       "campaign" => CampaignCLI.usage_lines(),
+      "agent" => AgentCLI.usage_lines(),
       "call" => [call_usage()],
       "cleanup" => CleanupCLI.usage_lines(),
       "ci" => [ci_usage()],
@@ -7275,8 +7503,10 @@ defmodule JX.CLI do
         "jx policy tiers [--json]"
       ],
       "portfolio" => [portfolio_summary_usage(), call_brief_usage()],
+      "reflect" => [reflect_usage()],
       "promote" => [promote_usage()],
       "queue" => QueueCLI.usage_lines(),
+      "recap" => RecapCLI.usage_lines(),
       "project" => ProjectCLI.usage(),
       "repo" => [repo_doctor_usage(), repo_gate_usage()],
       "session" => SessionCLI.usage_lines(),
@@ -7301,6 +7531,7 @@ defmodule JX.CLI do
       jx call brief --observe
       jx meet session ls
       jx next
+      jx recap
       jx portfolio summary --observe
       jx orchestrator status
       jx modes
@@ -7328,7 +7559,10 @@ defmodule JX.CLI do
       jx help sessions
 
     Usage:
+      jx --version
       jx [--db path] help [group]
+      jx [--db path] recap [--days 7 | --since <iso8601>] [--until <iso8601>] [-n 10] [--json]
+      jx [--db path] week [same options as recap]
       jx [--db path] modes [<mode>|playbook <mode>] [--json]
       jx [--db path] next [--host <host>] [--project <name>] [--managed] [--all-processes] [--type agent|process|ssh|task|tmux] [--ssh-target <target>] [--work-state unobservable|unknown|blocked|running|waiting|idle] [--control managed|ignored|protected|uncontrolled] [--no-observe] [--lines 80] [--scan-limit 100] [-n 5] [--json]
       jx [--db path] wake --message <text> [--project <name>] [--ref <ref>] [--severity info|notice|warning|critical] [--json]
@@ -7371,7 +7605,7 @@ defmodule JX.CLI do
       jx [--db path] approvals show <id> [--json]
       jx [--db path] approvals ack <id> [--json]
       jx [--db path] approvals dismiss <id> [--json]
-      jx [--db path] queue ls [--kind workspace|approval|action|lease|agent|runner|assignment|session] [--workspace <id>] [--owner <owner>] [--risk blocked|stale|risky|awaiting_operator] [--freshness fresh|stale|unknown] [--sort urgency|freshness|owner|risk] [--stale-after-seconds 900] [-n 50] [--json]
+      jx [--db path] queue ls [--kind workspace|blocker|approval|action|lease|agent|runner|assignment|session] [--workspace <id>] [--owner <owner>] [--risk blocked|stale|risky|awaiting_operator] [--freshness fresh|stale|unknown] [--sort urgency|freshness|owner|risk] [--stale-after-seconds 900] [-n 50] [--json]
       jx [--db path] queue workspace <workspace-id> [--json]
       jx [--db path] dashboard [--stale-after-seconds 900] [--events 25] [-n 50] [--json]
       jx [--db path] dashboard workspace <workspace-id> [--stale-after-seconds 900] [--events 25] [--json]
@@ -7498,6 +7732,7 @@ defmodule JX.CLI do
       jx [--db path] task adopt-tmux <project> --session <name> --worktree <path> [--server <server>] [--window 0] [--pane 0] [--agent claude|opencode|codex]
       jx [--db path] task adopt-activity <project> --server <server> --session <name> [--window 0] [--pane 0] [--agent claude|opencode|codex]
       jx [--db path] task send <task-id> "<message>" [--window 0] [--pane 0] [--no-enter]
+      jx [--db path] task reconcile [--stale-after-seconds 21600] [--expire-after-seconds 172800] [--json]
       jx [--db path] session capture <ref> [-n 80]
       jx [--db path] session attach <ref>
       jx [--db path] session inspect <ref> [--json]
@@ -7701,6 +7936,7 @@ defmodule JX.CLI do
   defp format_error(:remote_probe_requires_force), do: "remote probe requires --force"
   defp format_error(:remote_probe_needs_shell_prompt), do: "remote probe needs a shell prompt"
   defp format_error({:ssh_failed, status, output}), do: "ssh failed with #{status}: #{output}"
+  defp format_error({:ssh_timeout, timeout_ms}), do: "ssh timed out after #{timeout_ms}ms"
 
   defp format_error({:unsupported_agent, agent}),
     do:
@@ -7709,11 +7945,20 @@ defmodule JX.CLI do
   defp format_error({:local_failed, status, output}),
     do: "local command failed with #{status}: #{output}"
 
+  defp format_error({:local_timeout, timeout_ms}),
+    do: "local command timed out after #{timeout_ms}ms"
+
   defp format_error({:process_inventory_failed, status, output}),
     do: "process inventory failed with #{status}: #{output}"
 
+  defp format_error({:process_inventory_timeout, timeout_ms}),
+    do: "process inventory timed out after #{timeout_ms}ms"
+
   defp format_error({:tmux_inventory_failed, status, output}),
     do: "tmux inventory failed with #{status}: #{output}"
+
+  defp format_error({:git_timeout, timeout_ms}), do: "git timed out after #{timeout_ms}ms"
+  defp format_error({:gh_timeout, timeout_ms}), do: "gh timed out after #{timeout_ms}ms"
 
   defp format_error({:pane_transport_failed, step, status, output}),
     do: "tmux pane #{step} failed with #{status}: #{output}"

@@ -11,11 +11,14 @@ defmodule JX.CLI.Campaign do
   @tick_usage "jx campaign tick <name> [--dry-run|--apply] [--repo <owner/repo>] [--repo-root <dir>] [--root <dir>] [--host-id <id>] [--json]"
   @status_usage "jx campaign status <name> [--root <dir>] [--json]"
   @events_usage "jx campaign events <name> [--root <dir>] [--json]"
+  @confirm_usage "jx campaign confirm <name> --message <text> [--slot <n>] [--status <status>] [--root <dir>] [--json]"
 
   def usage,
-    do: "#{@init_usage} | #{@seed_usage} | #{@tick_usage} | #{@status_usage} | #{@events_usage}"
+    do:
+      "#{@init_usage} | #{@seed_usage} | #{@tick_usage} | #{@status_usage} | #{@events_usage} | #{@confirm_usage}"
 
-  def usage_lines, do: [@init_usage, @seed_usage, @tick_usage, @status_usage, @events_usage]
+  def usage_lines,
+    do: [@init_usage, @seed_usage, @tick_usage, @status_usage, @events_usage, @confirm_usage]
 
   def run(["init", name | args], _opts) do
     {parsed, rest, invalid} =
@@ -128,6 +131,26 @@ defmodule JX.CLI.Campaign do
     end
   end
 
+  def run(["confirm", name | args], _opts) do
+    {parsed, rest, invalid} =
+      OptionParser.parse(args,
+        strict: [message: :string, slot: :integer, status: :string, root: :string, json: :boolean]
+      )
+
+    with :ok <- validate_options(invalid),
+         :ok <- expect_no_args(rest, @confirm_usage),
+         {:ok, message} <- require_message(parsed[:message]),
+         {:ok, state} <-
+           Campaigns.confirm(
+             name,
+             %{"message" => message, "slot_index" => parsed[:slot], "status" => parsed[:status]},
+             root: parsed[:root]
+           ) do
+      print_state(state, json: parsed[:json] || false, root: parsed[:root])
+      :ok
+    end
+  end
+
   def run(_args, _opts), do: {:error, "usage: #{usage()}"}
 
   defp validate_direction(nil), do: :ok
@@ -145,12 +168,21 @@ defmodule JX.CLI.Campaign do
     end
   end
 
+  defp require_message(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: {:error, "missing required --message"}, else: {:ok, value}
+  end
+
+  defp require_message(_value), do: {:error, "missing required --message"}
+
   defp print_state(state, json: true, root: _root), do: print_json(state)
 
   defp print_state(state, json: false, root: root) do
     IO.puts("campaign: #{state["name"]}")
     IO.puts("state: #{Campaigns.state_path(state["name"], root: root)}")
     IO.puts("issues: #{length(state["issues"] || [])}")
+    IO.puts("summary: #{summary_line(state["summary"] || %{})}")
+    IO.puts("confirmations: #{length(state["confirmations"] || [])}")
 
     rows =
       state
@@ -172,6 +204,8 @@ defmodule JX.CLI.Campaign do
     else
       print_table(["slot", "issue", "agent", "status", "branch", "pr", "worktree"], rows)
     end
+
+    print_next_actions(state["next_actions"] || [])
   end
 
   defp print_tick(result, json: true), do: print_json(result)
@@ -203,5 +237,27 @@ defmodule JX.CLI.Campaign do
       end)
 
     if rows == [], do: IO.puts("events: none"), else: print_table(["at", "type", "data"], rows)
+  end
+
+  defp print_next_actions([]), do: :ok
+
+  defp print_next_actions(actions) do
+    IO.puts("")
+    IO.puts("next actions")
+
+    Enum.each(actions, fn action ->
+      detail = action["command"] || action["worktree_path"] || action["evidence"] || ""
+      IO.puts("  - slot #{action["slot_index"]}: #{action["action"]} #{detail}")
+    end)
+  end
+
+  defp summary_line(summary) do
+    [
+      "slots=#{summary["slots_total"] || 0}",
+      "prs=#{summary["prs"] || 0}",
+      "blocked=#{summary["blocked"] || 0}",
+      "ready=#{summary["ready"] || 0}"
+    ]
+    |> Enum.join(" ")
   end
 end

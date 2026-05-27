@@ -10,7 +10,14 @@ defmodule JX.CLITest do
 
     assert output =~ "jx orchestrates durable SSH/tmux worktree sessions."
     assert output =~ "jx [--db path] help [group]"
+    assert output =~ "jx [--db path] recap"
     assert output =~ "Common workflows:"
+  end
+
+  test "--version prints jx version" do
+    output = capture_io(fn -> assert :ok = CLI.run(["--version"]) end)
+
+    assert output =~ "jx "
   end
 
   test "help group prints focused usage" do
@@ -910,6 +917,7 @@ defmodule JX.CLITest do
     assert {:error, message} = CLI.run(["task"])
     assert message =~ "usage:"
     assert message =~ "jx task"
+    assert message =~ "jx task reconcile"
   end
 
   test "attach without task_id returns top-level usage" do

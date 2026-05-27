@@ -49,6 +49,14 @@ defmodule JX.Tasks do
     |> Repo.all()
   end
 
+  def list_tasks_by_status(statuses) when is_list(statuses) do
+    Task
+    |> where([task], task.status in ^statuses)
+    |> order_by([task], asc: task.updated_at)
+    |> preload([:host, :project])
+    |> Repo.all()
+  end
+
   def count_running_for_host(host_id) do
     Task
     |> where([t], t.host_id == ^host_id and t.status == "running")

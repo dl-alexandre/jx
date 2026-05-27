@@ -44,9 +44,20 @@ defmodule JX.MixProject do
     [
       main_module: JX.CLI,
       name: "jx",
+      path: System.get_env("JX_ESCRIPT_PATH") || "jx",
       app: nil,
+      embed_elixir: escript_embed_elixir?(),
+      strip_beams: escript_strip_beams?(),
       include_priv_for: [:jx, :tzdata, :exqlite]
     ]
+  end
+
+  defp escript_embed_elixir? do
+    System.get_env("JX_ESCRIPT_EMBED_ELIXIR", "true") not in ["0", "false", "FALSE", "no", "NO"]
+  end
+
+  defp escript_strip_beams? do
+    System.get_env("JX_ESCRIPT_STRIP", "true") not in ["0", "false", "FALSE", "no", "NO"]
   end
 
   defp description do
@@ -69,6 +80,8 @@ defmodule JX.MixProject do
         "docs/hexdocs/session_profiles.md",
         "docs/hexdocs/delegation.md",
         "docs/hexdocs/ci_watches.md",
+        "docs/hexdocs/campaigns.md",
+        "docs/hexdocs/reflection.md",
         "docs/hexdocs/devide.md",
         "docs/hexdocs/safe_actions.md",
         "docs/hexdocs/call_handoffs.md",
@@ -92,6 +105,8 @@ defmodule JX.MixProject do
           "docs/hexdocs/session_profiles.md",
           "docs/hexdocs/delegation.md",
           "docs/hexdocs/ci_watches.md",
+          "docs/hexdocs/campaigns.md",
+          "docs/hexdocs/reflection.md",
           "docs/hexdocs/devide.md",
           "docs/hexdocs/safe_actions.md",
           "docs/hexdocs/call_handoffs.md",
@@ -235,12 +250,33 @@ defmodule JX.MixProject do
 
   defp aliases do
     [
+      "jx.build": [&jx_build/1],
+      "jx.smoke": [&jx_smoke/1],
       "jx.contract": [
         "test test/jx/dev_ide/contract_test.exs test/jx/safe_actions/registry_contract_test.exs"
       ],
-      "jx.build": ["cmd", "MIX_ENV=prod mix escript.build"],
       precommit: ["compile --warnings-as-errors", "format --check-formatted", "test"]
     ]
+  end
+
+  defp jx_build(_args), do: run_jx_build(["build"])
+
+  defp jx_smoke(_args), do: run_jx_build(["smoke"])
+
+  defp run_jx_build(args) do
+    root = File.cwd!()
+
+    {output, status} =
+      System.cmd(Path.join(root, "bin/jx-build"), args,
+        cd: root,
+        stderr_to_stdout: true
+      )
+
+    IO.write(output)
+
+    if status != 0 do
+      Mix.raise("bin/jx-build #{Enum.join(args, " ")} exited #{status}")
+    end
   end
 end
 

@@ -47,11 +47,13 @@ checks for retired Hex dependencies and should be treated as a publishing gate.
 
 ## Local Development Build
 
-For local dogfooding, use the escript:
+For local dogfooding, build the launcher and smoke-test both entrypoints:
 
 ```bash
-mix escript.build
-./bin/jx version
+mix jx.build
+./jx --version
+./jx help
+JX_USE_MIX=1 bin/jx help
 ```
 
 ## OTP Release

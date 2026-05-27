@@ -6,7 +6,7 @@ defmodule JX.CLI.Queue do
   import JX.CLI.Support,
     only: [expect_no_args: 2, print_json: 1, print_table: 2, validate_options: 1]
 
-  @queue_ls_usage "jx queue ls [--kind workspace|approval|action|lease|agent|runner|assignment|session] [--workspace <id>] [--owner <owner>] [--risk blocked|stale|risky|awaiting_operator] [--freshness fresh|stale|unknown] [--sort urgency|freshness|owner|risk] [--stale-after-seconds 900] [-n 50] [--json]"
+  @queue_ls_usage "jx queue ls [--kind workspace|blocker|approval|action|lease|agent|runner|assignment|session] [--workspace <id>] [--owner <owner>] [--risk blocked|stale|risky|awaiting_operator] [--freshness fresh|stale|unknown] [--sort urgency|freshness|owner|risk] [--stale-after-seconds 900] [-n 50] [--json]"
   @queue_workspace_usage "jx queue workspace <workspace-id> [--json]"
   @queue_rebuild_usage "jx queue rebuild [--json]"
 
@@ -120,13 +120,13 @@ defmodule JX.CLI.Queue do
   defp validate_optional_queue_kind(nil), do: :ok
 
   defp validate_optional_queue_kind(kind)
-       when kind in ~w(workspace approval action lease agent runner assignment session),
+       when kind in ~w(workspace blocker approval action lease agent runner assignment session),
        do: :ok
 
   defp validate_optional_queue_kind(kind),
     do:
       {:error,
-       "unsupported queue kind #{inspect(kind)}; expected workspace, approval, action, lease, agent, runner, assignment, or session"}
+       "unsupported queue kind #{inspect(kind)}; expected workspace, blocker, approval, action, lease, agent, runner, assignment, or session"}
 
   defp validate_optional_queue_risk(nil), do: :ok
 

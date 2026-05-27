@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+
+usage() {
+  cat >&2 <<'USAGE'
+usage: scripts/grok-review [--staged] [--json] [--web]
+
+Reviews the current git diff with Grok and prints an advisory review.
+By default it reviews unstaged plus staged changes against HEAD.
+USAGE
+}
+
+STAGED=0
+GROK_ARGS=()
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --staged)
+      STAGED=1
+      shift
+      ;;
+    --json|--web)
+      GROK_ARGS+=("$1")
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'unknown option: %s\n' "$1" >&2
+      usage
+      exit 64
+      ;;
+  esac
+done
+
+if ! git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  printf '%s\n' "scripts/grok-review must be run inside a git worktree" >&2
+  exit 69
+fi
+
+TMP_PROMPT="${TMPDIR:-/tmp}/grok-review-$$.md"
+trap 'rm -f "$TMP_PROMPT"' EXIT HUP INT TERM
+
+if [ "$STAGED" -eq 1 ]; then
+  DIFF_CMD=(git -C "$ROOT" diff --cached --)
+else
+  DIFF_CMD=(git -C "$ROOT" diff HEAD --)
+fi
+
+if ! "${DIFF_CMD[@]}" --quiet; then
+  {
+    printf '%s\n\n' "Review this git diff for likely bugs, regressions, safety issues, and missing tests."
+    printf '%s\n' "Prioritize concrete findings with file paths and line references when possible."
+    printf '%s\n' "Do not comment on style unless it affects behavior or maintainability."
+    printf '\n```diff\n'
+    "${DIFF_CMD[@]}"
+    printf '```\n'
+  } >"$TMP_PROMPT"
+else
+  printf '%s\n' "no diff to review" >&2
+  exit 0
+fi
+
+if [ "${#GROK_ARGS[@]}" -gt 0 ]; then
+  "$ROOT/scripts/grok" "${GROK_ARGS[@]}" --prompt-file "$TMP_PROMPT"
+else
+  "$ROOT/scripts/grok" --prompt-file "$TMP_PROMPT"
+fi

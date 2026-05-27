@@ -14,8 +14,18 @@ advance issue worktrees. Do not run `jx campaign tick --apply`.
   `uitestserver:/home/developer/OneBackend-v3/.jx/campaigns/onebackend-v3-e14.json`.
 - Local campaign helper scripts in this checkout:
   - `scripts/campaign_pr_status.sh`
-  - `scripts/campaign_lane_status.sh`
+  - `scripts/campaign_lane_status.sh` (use `--advanced` / `--all` / `--only <host>` / `--json-file` for merge phase)
+  - `scripts/campaign_merge_assist.sh` (generate per-host rebase + review runbooks for advanced lanes)
   - `scripts/campaign_sync.sh`
+
+For the post-advance / merge phase (when resolving conflicts on already-opened PRs from advanced slots), also use `campaign_lane_status.sh --advanced` and `campaign_merge_assist.sh --host <name>` to obtain safe, host-specific commands (especially for milcmini missing worktree dirs).
+
+Offline / recovery usage (e.g. after `campaign_sync.sh pull` or when direct canonical SSH is unavailable):
+
+```sh
+./scripts/campaign_lane_status.sh --advanced --only milcmini --json-file /tmp/e14-campaign.json
+./scripts/campaign_merge_assist.sh --host milcmini --json-file /tmp/e14-campaign.json
+```
 
 ## Normal Pass
 
