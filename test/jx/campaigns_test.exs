@@ -53,6 +53,8 @@ defmodule JX.CampaignsTest do
 
     assert Enum.map(seeded["slots"], & &1["issue_number"]) == [1152, 1153]
     assert Enum.all?(seeded["slots"], &(&1["status"] == "agent_working"))
+    assert seeded["summary"]["slots_total"] == 2
+    assert seeded["summary"]["by_host"]["host-a"] == 2
 
     assert {:ok, reseeded} =
              Campaigns.seed_from_existing_worktrees("onebackend-v3-e14",
@@ -63,6 +65,29 @@ defmodule JX.CampaignsTest do
              )
 
     assert length(reseeded["slots"]) == 2
+  end
+
+  test "confirm records operator confirmation and derived next actions", ctx do
+    {:ok, _state} =
+      Campaigns.init("onebackend-v3-e14",
+        issues: "1151",
+        direction: "desc",
+        root: ctx.state_root
+      )
+
+    assert {:ok, confirmed} =
+             Campaigns.confirm(
+               "onebackend-v3-e14",
+               %{"slot_index" => 0, "message" => "batch reviewed", "status" => "ready"},
+               root: ctx.state_root
+             )
+
+    assert [%{"message" => "batch reviewed", "status" => "ready"}] =
+             confirmed["confirmations"]
+
+    assert [%{"type" => "confirmed"}] = confirmed["events"]
+    assert confirmed["summary"]["slots_total"] == 0
+    assert confirmed["next_actions"] == []
   end
 
   test "dry-run tick detects PRs without writing state and apply advances the slot once", ctx do
