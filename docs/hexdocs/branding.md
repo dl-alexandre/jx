@@ -26,6 +26,7 @@ Current state:
 - Hex package distribution uses `jido_orchestrator`; documentation and CLI
   examples use `jx` as the public name.
 - `bin/jx` is the local wrapper.
-- `mix escript.build` emits `jx`.
+- `mix jx.build` emits the local `./jx` launcher.
+- `mix escript.build` remains the Hex-style escript build.
 - `JX.*` is the stable module namespace.
 - runtime defaults use `~/.jx`.

@@ -32,19 +32,26 @@ Run the wrapper through Mix:
 bin/jx status
 ```
 
-## Build The Escript
+## Build The Local Launcher
 
-Build a local escript:
+Build and smoke-test the local `./jx` launcher:
+
+```bash
+mix jx.build
+```
+
+This creates a `jx` executable at the project root and verifies:
+
+```bash
+./jx --version
+./jx help
+JX_USE_MIX=1 bin/jx help
+```
+
+To build the Hex-style escript directly, run:
 
 ```bash
 mix escript.build
-```
-
-This creates a `jx` executable at the project root. To force the wrapper to use
-the escript instead of `mix run`, set:
-
-```bash
-JX_USE_ESCRIPT=1 bin/jx sessions queues
 ```
 
 ## Database
