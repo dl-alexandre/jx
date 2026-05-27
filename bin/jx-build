@@ -1,0 +1,183 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+cd "$ROOT"
+
+BUILD_TIMEOUT="${JX_BUILD_TIMEOUT:-180s}"
+SMOKE_TIMEOUT="${JX_SMOKE_TIMEOUT:-30s}"
+TARGET="$ROOT/jx"
+TMP_TARGET="$ROOT/.jx.build.$$"
+TMP_LOG="$ROOT/.jx.compile.$$"
+BUILD_ENV="${JX_BUILD_ENV:-dev}"
+BUILD_ROOT="${JX_BUILD_ROOT:-}"
+
+if [ -n "$BUILD_ROOT" ]; then
+  BUILD_PATH="$BUILD_ROOT/$BUILD_ENV/lib/jx"
+else
+  BUILD_PATH="$ROOT/_build/$BUILD_ENV/lib/jx"
+fi
+
+cleanup() {
+  rm -f "$TMP_TARGET"
+  rm -f "$TMP_LOG"
+}
+
+trap cleanup EXIT INT TERM
+
+timeout_bin() {
+  if command -v timeout >/dev/null 2>&1; then
+    printf '%s\n' timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    printf '%s\n' gtimeout
+  else
+    printf '%s\n' ""
+  fi
+}
+
+run_bounded() {
+  timeout_value="$1"
+  shift
+
+  bin="$(timeout_bin)"
+  if [ -n "$bin" ]; then
+    "$bin" "$timeout_value" "$@"
+  else
+    "$@"
+  fi
+}
+
+clean_conflicts() {
+  # Cloud-synced workspaces can leave conflict copies like "Elixir.Foo 2.beam".
+  # They confuse Mix verification and make local rebuilds look hung.
+  for path in "$ROOT/deps" "$ROOT/_build"; do
+    if [ -e "$path" ]; then
+      find "$path" \( -name '* [0-9]' -o -name '* [0-9].*' \) -exec rm -rf {} +
+    fi
+  done
+}
+
+clean_build_conflicts() {
+  if [ -d "$BUILD_PATH/ebin" ]; then
+    find "$BUILD_PATH/ebin" -name '* [0-9]*.beam' | while IFS= read -r conflict; do
+      canonical="$(printf '%s\n' "$conflict" | sed 's/ [0-9][0-9]*\.beam$/.beam/')"
+
+      if [ -f "$canonical" ]; then
+        rm -f "$conflict"
+      else
+        mv "$conflict" "$canonical"
+      fi
+    done
+  fi
+}
+
+compile_source() {
+  rm -rf "$BUILD_PATH"
+  clean_build_conflicts
+  clean_conflicts
+
+  set +e
+  if [ -n "$BUILD_ROOT" ]; then
+    run_bounded "$BUILD_TIMEOUT" env MIX_ENV="$BUILD_ENV" MIX_BUILD_ROOT="$BUILD_ROOT" mix compile >"$TMP_LOG" 2>&1
+  else
+    run_bounded "$BUILD_TIMEOUT" env MIX_ENV="$BUILD_ENV" mix compile >"$TMP_LOG" 2>&1
+  fi
+  compile_status=$?
+  set -e
+
+  clean_conflicts
+
+  if [ -f "$BUILD_PATH/ebin/Elixir.JX.CLI.beam" ]; then
+    set +e
+    if [ -n "$BUILD_ROOT" ]; then
+      run_bounded "$SMOKE_TIMEOUT" env MIX_ENV="$BUILD_ENV" MIX_BUILD_ROOT="$BUILD_ROOT" mix compile.app >>"$TMP_LOG" 2>&1
+    else
+      run_bounded "$SMOKE_TIMEOUT" env MIX_ENV="$BUILD_ENV" mix compile.app >>"$TMP_LOG" 2>&1
+    fi
+    app_status=$?
+    set -e
+
+    if [ "$compile_status" -eq 0 ]; then
+      compile_status="$app_status"
+    fi
+  fi
+
+  if [ "${JX_BUILD_VERBOSE:-0}" = "1" ]; then
+    cat "$TMP_LOG"
+  fi
+
+  return "$compile_status"
+}
+
+quote_sh() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+write_launcher() {
+  build_root_value="$(quote_sh "$BUILD_ROOT")"
+  build_env_value="$(quote_sh "$BUILD_ENV")"
+
+  {
+    printf '%s\n' '#!/usr/bin/env sh'
+    printf '%s\n' 'set -eu'
+    printf '%s\n' 'ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"'
+    printf '%s\n' 'cd "$ROOT"'
+    printf 'JX_BUILD_ENV=${JX_BUILD_ENV:-%s}\n' "$build_env_value"
+
+    if [ -n "$BUILD_ROOT" ]; then
+      printf 'JX_BUILD_ROOT=${JX_BUILD_ROOT:-%s}\n' "$build_root_value"
+      printf '%s\n' 'export MIX_BUILD_ROOT="$JX_BUILD_ROOT"'
+    fi
+
+    printf '%s\n' 'export MIX_ENV="$JX_BUILD_ENV"'
+    printf '%s\n' 'export JX_USE_MIX=1'
+    printf '%s\n' 'exec "$ROOT/bin/jx" "$@"'
+  } >"$TMP_TARGET"
+
+  chmod +x "$TMP_TARGET"
+}
+
+smoke_executable() {
+  executable="$1"
+
+  run_bounded "$SMOKE_TIMEOUT" "$executable" --version >/dev/null
+  run_bounded "$SMOKE_TIMEOUT" "$executable" help >/dev/null
+}
+
+smoke() {
+  smoke_executable "$TARGET"
+  run_bounded "$SMOKE_TIMEOUT" env JX_USE_MIX=1 "$ROOT/bin/jx" help >/dev/null
+}
+
+case "${1:-build}" in
+  build)
+    if ! compile_source && { [ ! -f "$BUILD_PATH/ebin/Elixir.JX.CLI.beam" ] || [ ! -f "$BUILD_PATH/ebin/jx.app" ]; }; then
+      cat "$TMP_LOG" >&2
+      echo "jx-build: mix compile failed before producing a runnable jx app in $BUILD_PATH/ebin" >&2
+      exit 1
+    fi
+
+    if [ ! -f "$BUILD_PATH/ebin/Elixir.JX.CLI.beam" ] || [ ! -f "$BUILD_PATH/ebin/jx.app" ]; then
+      cat "$TMP_LOG" >&2
+      echo "jx-build: expected fresh CLI beam and jx.app in $BUILD_PATH/ebin, but they were not created" >&2
+      exit 1
+    fi
+
+    write_launcher
+    smoke_executable "$TMP_TARGET"
+    mv "$TMP_TARGET" "$TARGET"
+    smoke
+    clean_build_conflicts
+    clean_conflicts
+    ;;
+  escript)
+    run_bounded "$BUILD_TIMEOUT" env MIX_ENV=prod mix escript.build
+    ;;
+  smoke | --smoke-only)
+    smoke
+    ;;
+  *)
+    echo "usage: bin/jx-build [build|smoke|--smoke-only|escript]" >&2
+    exit 2
+    ;;
+esac

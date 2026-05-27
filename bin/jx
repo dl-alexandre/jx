@@ -4,8 +4,8 @@ set -eu
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 
-# Prefer the locally-built dogfood escript (./jx) by default.
-# This is the recommended path after running `MIX_ENV=prod mix escript.build`.
+# Prefer the locally-built dogfood launcher (./jx) by default.
+# This is the recommended path after running `mix jx.build`.
 #
 # To force running against the live source tree (useful during active development):
 #   JX_USE_MIX=1 bin/jx ...
@@ -15,7 +15,7 @@ if [ "$FORCE_MIX" != "1" ] && [ -x "$ROOT/jx" ]; then
   exec "$ROOT/jx" "$@"
 fi
 
-# Legacy support: JX_USE_ESCRIPT=1 still works
+# Legacy support: JX_USE_ESCRIPT=1 still prefers ./jx when present.
 USE_ESCRIPT="${JX_USE_ESCRIPT:-0}"
 if [ "$USE_ESCRIPT" = "1" ] && [ -x "$ROOT/jx" ]; then
   exec "$ROOT/jx" "$@"
@@ -29,4 +29,4 @@ if [ "$AUTO_COMPILE" = "1" ] || [ ! -f "$CLI_BEAM" ]; then
   mix compile --quiet >/dev/null
 fi
 
-exec mix run --no-compile --no-start -e 'JX.CLI.main(System.argv())' -- "$@"
+exec mix run --no-compile --no-start -e 'JX.CLI.main(System.argv()); System.halt(0)' -- "$@"
